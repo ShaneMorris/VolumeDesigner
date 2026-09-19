@@ -1,0 +1,71 @@
+export interface Vec3 {
+  x: number;
+  y: number;
+  z: number;
+}
+
+export interface Vertex {
+  id: string;
+  position: Vec3;
+}
+
+export interface Face {
+  id: string;
+  /** Ordered, closed loop of vertex ids (not repeating the first at the end). */
+  vertexIds: string[];
+  label: string;
+}
+
+/** A dihedral angle lock between two faces along their shared edge. */
+export interface AngleLock {
+  id: string;
+  faceAId: string;
+  faceBId: string;
+  /** Interior dihedral angle in degrees, measured as the fold angle at the shared edge. */
+  targetAngleDeg: number;
+}
+
+export interface Hole {
+  id: string;
+  faceId: string;
+  /** Face-local coordinates, inches, origin at the face's first vertex. */
+  u: number;
+  v: number;
+  diameterIn: number;
+}
+
+export interface Design {
+  vertices: Vertex[];
+  faces: Face[];
+  angleLocks: AngleLock[];
+  holes: Hole[];
+  /** Global panel material thickness, inches — used only for corner miter correction. */
+  panelThicknessIn: number;
+  baseFaceId: string | null;
+}
+
+export function createEmptyDesign(): Design {
+  return {
+    vertices: [],
+    faces: [],
+    angleLocks: [],
+    holes: [],
+    panelThicknessIn: 0.75,
+    baseFaceId: null,
+  };
+}
+
+/** Unordered pair of vertex ids identifying an edge, canonicalized so (a,b) === (b,a). */
+export type EdgeKey = string;
+
+export function edgeKey(a: string, b: string): EdgeKey {
+  return a < b ? `${a}|${b}` : `${b}|${a}`;
+}
+
+export interface DerivedEdge {
+  key: EdgeKey;
+  a: string;
+  b: string;
+  /** Faces that contain this edge (as a consecutive vertex pair in their loop). Usually 1 or 2. */
+  faceIds: string[];
+}
