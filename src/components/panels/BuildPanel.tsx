@@ -1,0 +1,95 @@
+import { useState } from 'react';
+import { useDesignStore } from '../../store/designStore';
+import { VertexInspector } from './VertexInspector';
+import { NumberField } from '../ui/NumberField';
+
+export function BuildPanel() {
+  const design = useDesignStore((s) => s.design);
+  const draftVertexIds = useDesignStore((s) => s.draftVertexIds);
+  const cancelDraft = useDesignStore((s) => s.cancelDraft);
+  const closeDraftFace = useDesignStore((s) => s.closeDraftFace);
+  const selectedVertexId = useDesignStore((s) => s.selectedVertexId);
+  const selectedFaceId = useDesignStore((s) => s.selectedFaceId);
+  const renameFace = useDesignStore((s) => s.renameFace);
+  const deleteFace = useDesignStore((s) => s.deleteFace);
+  const pullUpFace = useDesignStore((s) => s.pullUpFace);
+  const setBaseFaceId = useDesignStore((s) => s.setBaseFaceId);
+
+  const [pullHeight, setPullHeight] = useState(3);
+  const selectedFace = design.faces.find((f) => f.id === selectedFaceId);
+
+  return (
+    <div>
+      <p className="panel-hint">
+        Click an existing vertex to start a new face; keep clicking vertices to add edges; click the first vertex
+        again (with 3+ picked) to close the face. Right-click cancels. Drag a selected vertex to reshape live.
+      </p>
+
+      <div className="status-row">
+        {draftVertexIds.length === 0 && 'No face in progress.'}
+        {draftVertexIds.length > 0 && `Drawing face: ${draftVertexIds.length} vertex/vertices picked.`}
+      </div>
+      {draftVertexIds.length > 0 && (
+        <div className="button-row">
+          <button onClick={cancelDraft}>Cancel</button>
+          <button disabled={draftVertexIds.length < 3} className="primary" onClick={() => closeDraftFace()}>
+            Close Face
+          </button>
+        </div>
+      )}
+
+      {design.baseFaceId && (
+        <>
+          <hr />
+          <div className="inspector-group-title">Pull-up shortcut</div>
+          <p className="panel-hint">
+            Extrudes the selected base face straight up by a height. Result is ordinary editable
+            geometry afterward — not the default action.
+          </p>
+          <NumberField label="Height" value={pullHeight} suffix="in" onCommit={setPullHeight} />
+          <div className="button-row">
+            <button
+              disabled={!selectedFaceId}
+              onClick={() => selectedFaceId && pullUpFace(selectedFaceId, pullHeight)}
+            >
+              Pull up selected face
+            </button>
+          </div>
+        </>
+      )}
+
+      {selectedFace && (
+        <>
+          <hr />
+          <div className="inspector-group-title">Selected face: {selectedFace.label}</div>
+          <label className="number-field">
+            <span className="number-field-label">Label</span>
+            <input
+              type="text"
+              value={selectedFace.label}
+              onChange={(e) => renameFace(selectedFace.id, e.target.value)}
+            />
+          </label>
+          <div className="button-row">
+            <button
+              disabled={design.baseFaceId === selectedFace.id}
+              onClick={() => setBaseFaceId(selectedFace.id)}
+            >
+              Set as base
+            </button>
+            <button className="danger" onClick={() => deleteFace(selectedFace.id)}>
+              Delete face
+            </button>
+          </div>
+        </>
+      )}
+
+      {selectedVertexId && (
+        <>
+          <hr />
+          <VertexInspector />
+        </>
+      )}
+    </div>
+  );
+}
