@@ -40,6 +40,9 @@ interface DesignStoreState {
 
   // Face-by-face build draft (ordered vertex ids of the face being drawn)
   draftVertexIds: string[];
+  // Height (Z) of the horizontal work plane new draft vertices are placed on when
+  // clicking empty space in Build mode.
+  workPlaneZ: number;
 
   // Undo/redo
   past: HistoryEntry[];
@@ -65,6 +68,7 @@ interface DesignStoreState {
   closeDraftFace: (label?: string) => void;
   cancelDraft: () => void;
   pullUpFace: (faceId: string, heightIn: number) => void;
+  setWorkPlaneZ: (z: number) => void;
 
   moveVertex: (id: string, position: Vec3, opts?: { commit?: boolean }) => void;
 
@@ -110,6 +114,7 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
 
   openSketch: [],
   draftVertexIds: [],
+  workPlaneZ: 0,
 
   past: [],
   future: [],
@@ -140,7 +145,13 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
       return { ...commit(s, nextDesign), openSketch: [], selectedFaceId: face.id };
     }),
 
-  startDraftAtVertex: (vertexId) => set({ draftVertexIds: [vertexId] }),
+  startDraftAtVertex: (vertexId) =>
+    set((s) => {
+      const vertex = s.design.vertices.find((v) => v.id === vertexId);
+      return { draftVertexIds: [vertexId], workPlaneZ: vertex ? vertex.position.z : s.workPlaneZ };
+    }),
+
+  setWorkPlaneZ: (z) => set({ workPlaneZ: z }),
 
   addDraftVertexById: (vertexId) =>
     set((s) => {

@@ -88,9 +88,12 @@ export function extrudeFace(
   makeIds: () => string,
 ): ExtrudeResult {
   const positions = facePositions(design, baseFace);
-  const normal = polygonNormal(positions);
-  // Extrude toward the side away from the face's own winding (so a base face wound to
-  // point its normal down still pulls "up" in the sense of away from itself).
+  const rawNormal = polygonNormal(positions);
+  // The base polygon's winding (and therefore its normal's sign) depends on the order its
+  // vertices were clicked in — not on which way is "up". Pull-up height is always meant to
+  // go upward, so pin the extrude direction to +Z regardless of winding; only fall back to
+  // the raw normal for a (near-)vertical face, where "up" isn't a meaningful distinction.
+  const normal = rawNormal.z < 0 ? V.scale(rawNormal, -1) : rawNormal;
   const offset = V.scale(normal, heightIn);
 
   const n = baseFace.vertexIds.length;

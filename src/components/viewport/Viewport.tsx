@@ -55,6 +55,68 @@ function SketchPreview() {
   );
 }
 
+/**
+ * Build mode's "draw into empty space" surface: an adjustable horizontal plane at
+ * `workPlaneZ` that clicks are projected onto to create new draft vertices, plus a
+ * visible marker grid so it's clear where in space clicks will land. Only live while a
+ * face is actively being drafted (a chain needs a starting, existing vertex first).
+ */
+function BuildWorkPlane() {
+  const mode = useDesignStore((s) => s.mode);
+  const draftVertexIds = useDesignStore((s) => s.draftVertexIds);
+  const workPlaneZ = useDesignStore((s) => s.workPlaneZ);
+  const addDraftNewVertex = useDesignStore((s) => s.addDraftNewVertex);
+
+  if (mode !== 'build' || draftVertexIds.length === 0) return null;
+
+  // The click-catcher mesh below is itself positioned at z = workPlaneZ (via the group's
+  // transform), so the raycast hit point e.point already lands exactly on that plane.
+  //
+  // Because the plane is infinite, a ray aimed at a vertex/face elsewhere in the scene
+  // can still cross this plane at some other, unrelated point first — geometrically
+  // "nearer" even though the user visually clicked on that other object. Whenever the
+  // same click also hit a vertex or face handle (anywhere along the ray, not just the
+  // nearest hit), defer to it: don't drop a stray point, and don't stop propagation, so
+  // that farther handle's own onClick still fires normally.
+  const onPlaneClick = (e: ThreeEvent<MouseEvent>) => {
+    const hitsHandle = e.intersections.some(
+      (i) => i.object.userData?.isVertexHandle || i.object.userData?.isFaceHandle,
+    );
+    if (hitsHandle) return;
+    e.stopPropagation();
+    const snapped = { x: Math.round(e.point.x * 8) / 8, y: Math.round(e.point.y * 8) / 8, z: workPlaneZ };
+    addDraftNewVertex(snapped);
+  };
+
+  return (
+    <group position={[0, 0, workPlaneZ]}>
+      <mesh onClick={onPlaneClick}>
+        <planeGeometry args={[1000, 1000]} />
+        <meshBasicMaterial color="#7dd3fc" transparent opacity={0.06} side={THREE.DoubleSide} />
+      </mesh>
+      <gridHelper args={[40, 40, '#7dd3fc', '#334155']} rotation={[Math.PI / 2, 0, 0]} />
+    </group>
+  );
+}
+
+/** Live preview of the face currently being drawn in Build mode: connects its picked
+ * vertices (existing or freshly-placed on the work plane) in order, open until closed. */
+function DraftFaceOutline() {
+  const design = useDesignStore((s) => s.design);
+  const draftVertexIds = useDesignStore((s) => s.draftVertexIds);
+
+  if (draftVertexIds.length < 2) return null;
+
+  const points = draftVertexIds
+    .map((id) => design.vertices.find((v) => v.id === id)?.position)
+    .filter((p): p is Vec3 => !!p)
+    .map((p) => new THREE.Vector3(p.x, p.y, p.z));
+
+  if (points.length < 2) return null;
+
+  return <Line points={points} color="#f5a623" lineWidth={2} dashed />;
+}
+
 function VertexHandle({ id, position }: { id: string; position: Vec3 }) {
   const mode = useDesignStore((s) => s.mode);
   const selectedVertexId = useDesignStore((s) => s.selectedVertexId);
@@ -96,6 +158,7 @@ function VertexHandle({ id, position }: { id: string; position: Vec3 }) {
         }}
         position={toArray(position)}
         onClick={onClick}
+        userData={{ isVertexHandle: true }}
       >
         <sphereGeometry args={[0.045, 14, 14]} />
         <meshStandardMaterial color={color} />
@@ -175,6 +238,7 @@ function FaceMesh({ face }: { face: Face }) {
         setHovered(true);
       }}
       onPointerOut={() => setHovered(false)}
+      userData={{ isFaceHandle: true }}
     >
       <bufferGeometry>
         <bufferAttribute attach="attributes-position" args={[geomPositions, 3]} />
@@ -254,6 +318,8 @@ function SceneContent() {
       <directionalLight position={[5, 5, 8]} intensity={0.8} />
       <GroundGrid />
       {mode === 'sketch' && <SketchPreview />}
+      {mode === 'build' && <BuildWorkPlane />}
+      {mode === 'build' && <DraftFaceOutline />}
       {design.faces.map((f) => (
         <FaceMesh key={f.id} face={f} />
       ))}

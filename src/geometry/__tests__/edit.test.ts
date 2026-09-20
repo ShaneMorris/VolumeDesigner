@@ -64,12 +64,28 @@ describe('extrudeFace', () => {
     expect(result.faces.length).toBe(1 + 1 + 3); // base + top + 3 sides
     const top = getFace(result, topFaceId);
     expect(top.vertexIds.length).toBe(3);
-    // Top vertices should sit directly above base vertices by the extrude height (normal = +z or -z).
+    // Top vertices should sit directly above (not below) base vertices by the extrude height.
     const baseA = result.vertices.find((v) => v.id === 'a')!.position;
     const topA = result.vertices.find((v) => v.id === topVertexIds[0])!.position;
-    const dz = Math.abs(topA.z - baseA.z);
-    expect(dz).toBeCloseTo(2, 9);
+    expect(topA.z - baseA.z).toBeCloseTo(2, 9);
     expect(topA.x).toBeCloseTo(baseA.x, 9);
     expect(topA.y).toBeCloseTo(baseA.y, 9);
+  });
+
+  it('always pulls up (+Z), even when the base polygon is wound clockwise from above', () => {
+    const design = createEmptyDesign();
+    // a -> b -> c is clockwise as seen from +Z, so the raw Newell normal points -Z.
+    design.vertices = [
+      { id: 'a', position: { x: 0, y: 0, z: 0 } },
+      { id: 'b', position: { x: 0, y: 1, z: 0 } },
+      { id: 'c', position: { x: 1, y: 0, z: 0 } },
+    ];
+    design.faces = [{ id: 'tri', vertexIds: ['a', 'b', 'c'], label: 'Base' }];
+
+    let counter = 0;
+    const { design: result, topVertexIds } = extrudeFace(design, design.faces[0], 3, () => `gen${counter++}`);
+    const baseA = result.vertices.find((v) => v.id === 'a')!.position;
+    const topA = result.vertices.find((v) => v.id === topVertexIds[0])!.position;
+    expect(topA.z - baseA.z).toBeCloseTo(3, 9);
   });
 });

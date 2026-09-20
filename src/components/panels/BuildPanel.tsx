@@ -14,6 +14,8 @@ export function BuildPanel() {
   const deleteFace = useDesignStore((s) => s.deleteFace);
   const pullUpFace = useDesignStore((s) => s.pullUpFace);
   const setBaseFaceId = useDesignStore((s) => s.setBaseFaceId);
+  const workPlaneZ = useDesignStore((s) => s.workPlaneZ);
+  const setWorkPlaneZ = useDesignStore((s) => s.setWorkPlaneZ);
 
   const [pullHeight, setPullHeight] = useState(3);
   const selectedFace = design.faces.find((f) => f.id === selectedFaceId);
@@ -21,21 +23,35 @@ export function BuildPanel() {
   return (
     <div>
       <p className="panel-hint">
-        Click an existing vertex to start a new face; keep clicking vertices to add edges; click the first vertex
-        again (with 3+ picked) to close the face. Right-click cancels. Drag a selected vertex to reshape live.
+        Click an existing vertex to start a new face, then keep clicking to add edges: click another existing
+        vertex to snap to it, or click empty space above the base to drop a new point on the work plane below.
+        Click the first vertex again (with 3+ picked) to close the face. Right-click cancels. Drag a selected
+        vertex to reshape live.
       </p>
 
       <div className="status-row">
-        {draftVertexIds.length === 0 && 'No face in progress.'}
+        {draftVertexIds.length === 0 && 'No face in progress — click an existing vertex to start one.'}
         {draftVertexIds.length > 0 && `Drawing face: ${draftVertexIds.length} vertex/vertices picked.`}
       </div>
       {draftVertexIds.length > 0 && (
-        <div className="button-row">
-          <button onClick={cancelDraft}>Cancel</button>
-          <button disabled={draftVertexIds.length < 3} className="primary" onClick={() => closeDraftFace()}>
-            Close Face
-          </button>
-        </div>
+        <>
+          <NumberField
+            label="Work plane height (Z)"
+            value={workPlaneZ}
+            suffix="in"
+            onCommit={setWorkPlaneZ}
+          />
+          <p className="panel-hint">
+            New points from clicking empty space land on this horizontal plane (shown as a faint blue grid).
+            Adjust it between clicks to place points at different heights.
+          </p>
+          <div className="button-row">
+            <button onClick={cancelDraft}>Cancel</button>
+            <button disabled={draftVertexIds.length < 3} className="primary" onClick={() => closeDraftFace()}>
+              Close Face
+            </button>
+          </div>
+        </>
       )}
 
       {design.baseFaceId && (
