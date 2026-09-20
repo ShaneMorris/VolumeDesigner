@@ -117,7 +117,7 @@ function DraftFaceOutline() {
   return <Line points={points} color="#f5a623" lineWidth={2} dashed />;
 }
 
-function VertexHandle({ id, position }: { id: string; position: Vec3 }) {
+function VertexHandle({ id, position, locked }: { id: string; position: Vec3; locked: boolean }) {
   const mode = useDesignStore((s) => s.mode);
   const selectedVertexId = useDesignStore((s) => s.selectedVertexId);
   const draftVertexIds = useDesignStore((s) => s.draftVertexIds);
@@ -135,6 +135,13 @@ function VertexHandle({ id, position }: { id: string; position: Vec3 }) {
   const onClick = (e: ThreeEvent<MouseEvent>) => {
     e.stopPropagation();
     if (mode === 'build') {
+      // Shift-click selects the vertex for the numeric inspector / lock toggle / drag
+      // gizmo, without disturbing whatever face draft is (or isn't) in progress. A plain
+      // click always drives the draft chain, since that's Build mode's primary gesture.
+      if (e.shiftKey) {
+        selectVertex(id);
+        return;
+      }
       if (draftVertexIds.length === 0) {
         startDraftAtVertex(id);
       } else if (id === draftVertexIds[0] && draftVertexIds.length >= 3) {
@@ -147,7 +154,7 @@ function VertexHandle({ id, position }: { id: string; position: Vec3 }) {
     selectVertex(id);
   };
 
-  const color = isSelected ? '#4ade80' : isInDraft ? '#f5a623' : '#7dd3fc';
+  const color = isSelected ? '#4ade80' : locked ? '#64748b' : isInDraft ? '#f5a623' : '#7dd3fc';
 
   return (
     <group>
@@ -163,7 +170,13 @@ function VertexHandle({ id, position }: { id: string; position: Vec3 }) {
         <sphereGeometry args={[0.045, 14, 14]} />
         <meshStandardMaterial color={color} />
       </mesh>
-      {mode === 'build' && isSelected && meshObj && (
+      {locked && (
+        <mesh position={toArray(position)}>
+          <ringGeometry args={[0.06, 0.075, 16]} />
+          <meshBasicMaterial color="#64748b" side={THREE.DoubleSide} />
+        </mesh>
+      )}
+      {mode === 'build' && isSelected && !locked && meshObj && (
         <TransformControls
           object={meshObj}
           mode="translate"
@@ -327,7 +340,7 @@ function SceneContent() {
         <FaceEdges key={`edges-${f.id}`} face={f} />
       ))}
       {design.vertices.map((v) => (
-        <VertexHandle key={v.id} id={v.id} position={v.position} />
+        <VertexHandle key={v.id} id={v.id} position={v.position} locked={!!v.locked} />
       ))}
       <HoleMarkers />
     </>

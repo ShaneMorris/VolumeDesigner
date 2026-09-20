@@ -12,18 +12,39 @@ export function VertexInspector() {
   const selectedVertexId = useDesignStore((s) => s.selectedVertexId);
   const setEdgeLength = useDesignStore((s) => s.setEdgeLength);
   const setInteriorAngle = useDesignStore((s) => s.setInteriorAngle);
+  const setVertexLocked = useDesignStore((s) => s.setVertexLocked);
 
   if (!selectedVertexId) {
     return <div className="panel-hint">Select a vertex to edit its edges and angle numerically.</div>;
   }
 
+  const vertex = design.vertices.find((v) => v.id === selectedVertexId);
+  if (!vertex) return null;
+
+  const lockToggle = (
+    <label className="checkbox-row">
+      <input
+        type="checkbox"
+        checked={!!vertex.locked}
+        onChange={(e) => setVertexLocked(vertex.id, e.target.checked)}
+      />
+      Locked (can't be dragged in Build mode)
+    </label>
+  );
+
   const memberFaces = design.faces.filter((f) => f.vertexIds.includes(selectedVertexId));
   if (memberFaces.length === 0) {
-    return <div className="panel-hint">Selected vertex isn't part of any face yet.</div>;
+    return (
+      <div>
+        {lockToggle}
+        <div className="panel-hint">Selected vertex isn't part of any face yet.</div>
+      </div>
+    );
   }
 
   return (
     <div className="inspector">
+      {lockToggle}
       {memberFaces.map((face) => {
         const n = face.vertexIds.length;
         const idx = face.vertexIds.indexOf(selectedVertexId);

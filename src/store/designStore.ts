@@ -71,6 +71,8 @@ interface DesignStoreState {
   setWorkPlaneZ: (z: number) => void;
 
   moveVertex: (id: string, position: Vec3, opts?: { commit?: boolean }) => void;
+  setVertexLocked: (id: string, locked: boolean) => void;
+  setVerticesLocked: (ids: string[], locked: boolean) => void;
 
   setEdgeLength: (anchorVertexId: string, movingVertexId: string, lengthIn: number) => void;
   setInteriorAngle: (faceId: string, vertexId: string, angleDeg: number) => void;
@@ -189,6 +191,8 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
 
   moveVertex: (id, position, opts) =>
     set((s) => {
+      const target = s.design.vertices.find((v) => v.id === id);
+      if (!target || target.locked) return {};
       const movedDesign: Design = {
         ...s.design,
         vertices: s.design.vertices.map((v) => (v.id === id ? { ...v, position } : v)),
@@ -198,6 +202,23 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
         return commit(s, relaxed);
       }
       return { design: relaxed };
+    }),
+
+  setVertexLocked: (id, locked) =>
+    set((s) =>
+      commit(s, {
+        ...s.design,
+        vertices: s.design.vertices.map((v) => (v.id === id ? { ...v, locked } : v)),
+      }),
+    ),
+
+  setVerticesLocked: (ids, locked) =>
+    set((s) => {
+      const idSet = new Set(ids);
+      return commit(s, {
+        ...s.design,
+        vertices: s.design.vertices.map((v) => (idSet.has(v.id) ? { ...v, locked } : v)),
+      });
     }),
 
   setEdgeLength: (anchorVertexId, movingVertexId, lengthIn) =>

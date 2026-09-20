@@ -16,17 +16,23 @@ export function BuildPanel() {
   const setBaseFaceId = useDesignStore((s) => s.setBaseFaceId);
   const workPlaneZ = useDesignStore((s) => s.workPlaneZ);
   const setWorkPlaneZ = useDesignStore((s) => s.setWorkPlaneZ);
+  const setVerticesLocked = useDesignStore((s) => s.setVerticesLocked);
 
   const [pullHeight, setPullHeight] = useState(3);
   const selectedFace = design.faces.find((f) => f.id === selectedFaceId);
+  const baseFace = design.faces.find((f) => f.id === design.baseFaceId);
+  const baseVertices = baseFace ? design.vertices.filter((v) => baseFace.vertexIds.includes(v.id)) : [];
+  const baseFullyLocked = baseVertices.length > 0 && baseVertices.every((v) => v.locked);
 
   return (
     <div>
       <p className="panel-hint">
         Click an existing vertex to start a new face, then keep clicking to add edges: click another existing
         vertex to snap to it, or click empty space above the base to drop a new point on the work plane below.
-        Click the first vertex again (with 3+ picked) to close the face. Right-click cancels. Drag a selected
-        vertex to reshape live.
+        Click the first vertex again (with 3+ picked) to close the face. Right-click cancels.
+        <br />
+        <strong>Shift-click</strong> a vertex to select it instead (for the numeric inspector, drag gizmo, or
+        lock toggle) without affecting any face you're drawing.
       </p>
 
       <div className="status-row">
@@ -69,6 +75,16 @@ export function BuildPanel() {
               onClick={() => selectedFaceId && pullUpFace(selectedFaceId, pullHeight)}
             >
               Pull up selected face
+            </button>
+          </div>
+
+          <div className="inspector-group-title">Vertex locking</div>
+          <p className="panel-hint">
+            A locked vertex can still be clicked to start/close a face, but its drag gizmo won't appear.
+          </p>
+          <div className="button-row">
+            <button onClick={() => setVerticesLocked(baseVertices.map((v) => v.id), !baseFullyLocked)}>
+              {baseFullyLocked ? 'Unlock base vertices' : 'Lock base vertices'}
             </button>
           </div>
         </>

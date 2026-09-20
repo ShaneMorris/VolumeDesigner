@@ -7,6 +7,8 @@ export interface Vec3 {
 export interface Vertex {
   id: string;
   position: Vec3;
+  /** When true, the vertex can still be used to snap/close faces but can't be dragged. */
+  locked?: boolean;
 }
 
 export interface Face {
