@@ -1,7 +1,10 @@
 import { create } from 'zustand';
 import type { AngleLock, Design, Face, Hole, Vec3 } from '../geometry/types';
-import { BASE_PLANE_DEFAULT_IN, clampBasePlaneSize, createEmptyDesign, edgeKey } from '../geometry/types';
+import { clampBasePlaneSize, createEmptyDesign, edgeKey } from '../geometry/types';
 import { deriveEdges, faceEdgeKeys, findSharedEdge, getFace, isFacePlanar } from '../geometry/mesh';
+import { edgesTouchingVertex, orphanVertexIds, removeEdgeKeys, withFaceEdges } from '../geometry/edges';
+import { normalizeDesign, type RawDesign } from '../geometry/normalize';
+import { validateDesign, type DesignIssue } from '../geometry/validate';
 import { setEdgeLengthByMovingVertex, setInteriorAngleAtVertex, extrudeFace } from '../geometry/edit';
 import { solveDihedralAngle } from '../geometry/solver';
 import { reapplyAngleLocks } from '../geometry/relax';
@@ -65,6 +68,9 @@ interface DesignStoreState {
   frameNonce: number;
   /** Whether moving a corner auto-adjusts a quad's opposite corner to keep it flat. */
   keepFacesFlat: boolean;
+  /** What validation found in the design as loaded, and what had to be repaired to open it. */
+  designIssues: DesignIssue[];
+  designRepairs: string[];
 
   // Undo/redo
   past: HistoryEntry[];
@@ -127,8 +133,10 @@ interface DesignStoreState {
   undo: () => void;
   redo: () => void;
 
-  loadDesign: (design: Design) => void;
+  loadDesign: (design: RawDesign) => void;
   resetDesign: () => void;
+  dismissDesignIssues: () => void;
+  makeFacesPlanar: () => void;
 }
 
 /** The plane of a draft chain once it has enough points to define one. */
@@ -172,7 +180,13 @@ function discardDraftVertices(design: Design, draftCreatedVertexIds: string[]): 
   return { ...design, vertices: design.vertices.filter((v) => !doomed.has(v.id)) };
 }
 
-/** Removes faces along with the holes, angle locks and base reference that depended on them. */
+/**
+ * Removes faces along with the holes, angle locks and base reference that depended on them.
+ *
+ * Their edges are deliberately left in place: deleting geometry leaves the wireframe
+ * standing so the faces can be redrawn on the same lines (requirements §3, constraint 5).
+ * Callers that mean to remove an edge as well do that explicitly.
+ */
 function removeFaces(design: Design, faceIds: Set<string>): Design {
   return {
     ...design,
@@ -225,6 +239,8 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
 
   past: [],
   future: [],
+  designIssues: [],
+  designRepairs: [],
 
   setMode: (mode) => set({ mode }),
 
@@ -244,12 +260,12 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
       const vertexIds = s.openSketch.map(() => makeId('v'));
       const newVertices = s.openSketch.map((position, i) => ({ id: vertexIds[i], position }));
       const face: Face = { id: makeId('f'), vertexIds, label };
-      const nextDesign: Design = {
+      const nextDesign: Design = withFaceEdges({
         ...s.design,
         vertices: [...s.design.vertices, ...newVertices],
         faces: [...s.design.faces, face],
         baseFaceId: s.design.baseFaceId ?? face.id,
-      };
+      });
       return { ...commit(s, nextDesign), openSketch: [], selectedFaceId: face.id };
     }),
 
@@ -260,13 +276,13 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
       const points = regularPolygonPoints(sides, widthIn);
       const vertexIds = points.map(() => makeId('v'));
       const face: Face = { id: makeId('f'), vertexIds, label: 'Base' };
-      const nextDesign: Design = {
+      const nextDesign: Design = withFaceEdges({
         ...createEmptyDesign(s.design.basePlaneSizeIn),
         panelThicknessIn: s.design.panelThicknessIn,
         vertices: points.map((position, i) => ({ id: vertexIds[i], position })),
         faces: [face],
         baseFaceId: face.id,
-      };
+      });
       return {
         ...commit(s, nextDesign),
         openSketch: [],
@@ -370,7 +386,7 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
         vertexIds: [...s.draftVertexIds],
         label: label ?? `Side ${s.design.faces.length}`,
       };
-      const nextDesign: Design = { ...s.design, faces: [...s.design.faces, face] };
+      const nextDesign = withFaceEdges({ ...s.design, faces: [...s.design.faces, face] });
       return { ...commit(s, nextDesign), ...CLEARED_DRAW_STATE, selectedFaceId: face.id };
     }),
 
@@ -383,8 +399,8 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
   pullUpFace: (faceId, heightIn) =>
     set((s) => {
       const face = getFace(s.design, faceId);
-      const { design: nextDesign } = extrudeFace(s.design, face, heightIn, () => makeId('v'));
-      return commit(s, nextDesign);
+      const { design: extruded } = extrudeFace(s.design, face, heightIn, () => makeId('v'));
+      return commit(s, withFaceEdges(extruded));
     }),
 
   moveVertex: (id, position, opts) =>
@@ -491,17 +507,21 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
     }),
 
   /**
-   * Removes a vertex and every face that used it as a corner — a face can't simply lose
-   * a corner, so the faces go with it. Other corners of those faces are kept, ready to
-   * redraw on.
+   * Removes a vertex, every edge touching it, and every face those edges formed
+   * (requirements §3, constraints 4 and 5). A face can't simply lose a corner, so the
+   * faces go with it; the other corners and the other edges of those faces stay, ready
+   * to redraw on.
    */
   deleteVertex: (id) =>
     set((s) => {
       if (!s.design.vertices.some((v) => v.id === id)) return {};
+      const doomedEdges = new Set(edgesTouchingVertex(s.design, id).map((e) => edgeKey(e.a, e.b)));
+      // Equivalent to "faces using a doomed edge": a face containing the vertex meets it
+      // along exactly two of its sides, both of which are incident edges.
       const touching = new Set(
         s.design.faces.filter((f) => f.vertexIds.includes(id)).map((f) => f.id),
       );
-      const withoutFaces = removeFaces(s.design, touching);
+      const withoutFaces = removeEdgeKeys(removeFaces(s.design, touching), doomedEdges);
       const nextDesign: Design = {
         ...withoutFaces,
         vertices: withoutFaces.vertices.filter((v) => v.id !== id),
@@ -516,19 +536,21 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
     }),
 
   /**
-   * Removes the faces meeting along an edge but leaves its two corners in place, so the
-   * geometry can be redrawn from the same points. Edges aren't stored — they exist only
-   * as consecutive pairs in a face loop — so dropping those faces is what removes it.
+   * Removes an edge and every face it helped form (requirements §3, constraint 5). Both
+   * corners survive, as do the other edges of those faces — the scaffold stays up so the
+   * geometry can be redrawn on the same lines.
    */
   deleteEdge: (aVertexId, bVertexId) =>
     set((s) => {
       const key = edgeKey(aVertexId, bVertexId);
+      const stored = s.design.edges.some((e) => edgeKey(e.a, e.b) === key);
       const adjoining = new Set(
         s.design.faces.filter((f) => faceEdgeKeys(f).includes(key)).map((f) => f.id),
       );
-      if (adjoining.size === 0) return {};
+      if (!stored && adjoining.size === 0) return {};
+      const nextDesign = removeEdgeKeys(removeFaces(s.design, adjoining), new Set([key]));
       return {
-        ...commit(s, removeFaces(s.design, adjoining)),
+        ...commit(s, nextDesign),
         selectedFaceId: null,
         selectedEdge: null,
         selectedEdgePair: null,
@@ -557,18 +579,25 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
       };
     }),
 
-  // Designs saved before a field existed still have to open, so fill in any gaps.
+  /**
+   * The single way a design enters the app, from a file or from localStorage. Everything
+   * arriving here is untrusted: it may predate stored edges, or have been hand-edited into
+   * a state the editing operations can't produce. Normalizing repairs what would otherwise
+   * crash and reports the rest rather than silently reshaping the model (§3, constraint 8).
+   */
   loadDesign: (design) =>
-    set({
-      design: {
-        ...design,
-        basePlaneSizeIn: clampBasePlaneSize(design.basePlaneSizeIn ?? BASE_PLANE_DEFAULT_IN),
-      },
-      past: [],
-      future: [],
-      ...CLEARED_DRAW_STATE,
-      selectedFaceId: null,
-      selectedVertexId: null,
+    set(() => {
+      const { design: normalized, issues, repairs } = normalizeDesign(design);
+      return {
+        design: normalized,
+        designIssues: issues,
+        designRepairs: repairs,
+        past: [],
+        future: [],
+        ...CLEARED_DRAW_STATE,
+        selectedFaceId: null,
+        selectedVertexId: null,
+      };
     }),
   // A new design starts at the user's saved work-area default, not the built-in one.
   resetDesign: () =>
@@ -576,13 +605,40 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
       design: createEmptyDesign(loadDefaultBasePlaneSize() ?? undefined),
       past: [],
       future: [],
+      designIssues: [],
+      designRepairs: [],
       ...CLEARED_DRAW_STATE,
       openSketch: [],
+    }),
+
+  dismissDesignIssues: () => set({ designIssues: [], designRepairs: [] }),
+
+  /**
+   * The offered repair for a design that arrived with warped faces. Explicit on purpose:
+   * constraint 9 holds for anything built in this app, but a file predating that rule is
+   * the user's geometry and doesn't get moved without them asking.
+   */
+  makeFacesPlanar: () =>
+    set((s) => {
+      const flattened = keepFacesPlanar(s.design, '');
+      return {
+        ...commit(s, flattened),
+        designIssues: validateDesign(flattened),
+      };
     }),
 }));
 
 export function allEdgesOf(design: Design) {
   return deriveEdges(design);
+}
+
+/**
+ * Vertices no edge reaches (requirements §3, constraint 2). These are legal and are never
+ * removed automatically — they are what deletion leaves behind to redraw on. Exposed so
+ * the UI can point them out, not so anything can tidy them away.
+ */
+export function orphanVerticesOf(design: Design) {
+  return orphanVertexIds(design);
 }
 
 export function faceIsPlanar(design: Design, face: Face) {

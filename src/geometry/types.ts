@@ -11,6 +11,19 @@ export interface Vertex {
   locked?: boolean;
 }
 
+/**
+ * A connection between exactly two distinct vertices (requirements §3, constraint 1).
+ *
+ * Edges are stored, not derived: an edge may belong to zero, one or two faces, which is
+ * what lets a defining edge be drawn exactly and left standing before the face around it
+ * exists. An edge is identified by its endpoint pair via `edgeKey`, not by a separate id —
+ * that makes "the same edge twice" unrepresentable rather than merely discouraged.
+ */
+export interface Edge {
+  a: string;
+  b: string;
+}
+
 export interface Face {
   id: string;
   /** Ordered, closed loop of vertex ids (not repeating the first at the end). */
@@ -38,6 +51,8 @@ export interface Hole {
 
 export interface Design {
   vertices: Vertex[];
+  /** Connectivity, and the source of truth for it. Faces are an ordered overlay on these. */
+  edges: Edge[];
   faces: Face[];
   angleLocks: AngleLock[];
   holes: Hole[];
@@ -61,6 +76,7 @@ export function clampBasePlaneSize(inches: number): number {
 export function createEmptyDesign(basePlaneSizeIn = BASE_PLANE_DEFAULT_IN): Design {
   return {
     vertices: [],
+    edges: [],
     faces: [],
     angleLocks: [],
     holes: [],

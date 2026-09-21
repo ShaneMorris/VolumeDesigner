@@ -81,10 +81,27 @@ the current solid.
 ## Architecture
 
 - `src/geometry/` — the core engine, framework-free and unit-tested (`vitest`):
-  vertex/face/hole data model, dihedral angle measurement, the angle-lock rotation
+  vertex/edge/face/hole data model, dihedral angle measurement, the angle-lock rotation
   solver, planarity check and the flatness relaxation, face unfolding (planar
   projection, or a non-planar fan-triangulated true-length approximation), and corner
   miter correction.
+
+  The model is **edge-primary** (see `docs/requirements.md` §3): edges are stored and carry
+  connectivity, and faces are an ordered overlay on them that also holds the label, base
+  designation, holes and angle locks. An edge may belong to no face at all, which is what
+  lets a defining edge be drawn exactly and left standing before the face around it exists,
+  and what lets deleting geometry leave a wireframe behind to redraw on. An edge is
+  identified by its endpoint pair rather than an id of its own, so "the same edge twice" is
+  unrepresentable. `edges.ts` keeps the edge set and the face loops in step — anything that
+  creates a face runs `withFaceEdges`, so no caller has to remember to.
+- `src/geometry/validate.ts` / `normalize.ts` — the ten constraints from the spec, checked.
+  In normal use nothing fires: the editing operations are written not to break them. They
+  earn their keep on the load path, where a design file is untrusted input. Structural
+  breakage (a face pointing at a vertex that isn't there, a face side with no edge) is
+  repaired, because the alternative is a crash; geometric invalidity (a warped, slivered or
+  self-crossing face) is reported and left alone, with a repair offered. Both are surfaced
+  in the sidebar rather than happening silently. Designs saved before edges existed migrate
+  on load by deriving their edge set from face loops, once.
 - `src/store/designStore.ts` — a Zustand store wrapping the design with selection
   state, undo/redo, and the mode-specific in-progress drafts (open sketch, face-build
   chain).

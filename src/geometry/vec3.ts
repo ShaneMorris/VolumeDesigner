@@ -61,7 +61,11 @@ export function rotatePointAboutLine(p: Vec3, origin: Vec3, axis: Vec3, angleRad
 }
 
 /** Newell's method: robust normal (and thus best-fit plane) for a possibly-non-planar polygon. */
-export function polygonNormal(points: Vec3[]): Vec3 {
+/**
+ * Newell's area vector: direction is the polygon's normal, magnitude is twice its area.
+ * Works for a polygon in any plane, and for a non-planar loop gives the best-fit answer.
+ */
+export function polygonAreaVector(points: Vec3[]): Vec3 {
   const n: Vec3 = { x: 0, y: 0, z: 0 };
   for (let i = 0; i < points.length; i++) {
     const cur = points[i];
@@ -70,7 +74,16 @@ export function polygonNormal(points: Vec3[]): Vec3 {
     n.y += (cur.z - next.z) * (cur.x + next.x);
     n.z += (cur.x - next.x) * (cur.y + next.y);
   }
-  return V.normalize(n);
+  return V.scale(n, 0.5);
+}
+
+/** Enclosed area of a polygon, in the same square units as its coordinates. */
+export function polygonArea(points: Vec3[]): number {
+  return V.length(polygonAreaVector(points));
+}
+
+export function polygonNormal(points: Vec3[]): Vec3 {
+  return V.normalize(polygonAreaVector(points));
 }
 
 export function polygonCentroid(points: Vec3[]): Vec3 {

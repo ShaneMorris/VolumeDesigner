@@ -5,6 +5,7 @@ import { deriveEdges, dihedralAngleDeg, findSharedEdge, getVertex, isFacePlanar,
 import { solveDihedralAngle } from '../solver';
 import { unfoldAllFaces, unfoldFace } from '../unfold';
 import { applyMiterCorrection } from '../miter';
+import { withFaceEdges } from '../edges';
 
 /** A box-corner fixture: a flat square base with one vertical wall rising off one edge. */
 function buildBoxCornerDesign(): Design {
@@ -22,7 +23,8 @@ function buildBoxCornerDesign(): Design {
     { id: 'side1', vertexIds: ['v0', 'v1', 't1', 't0'], label: 'Side 1' },
   ];
   design.baseFaceId = 'base';
-  return design;
+  // Faces have to be backed by stored edges now that edges carry connectivity.
+  return withFaceEdges(design);
 }
 
 describe('deriveEdges / sharedEdges', () => {

@@ -85,7 +85,12 @@ drawing, editing, or loading a file.
    viewport is the renderer's triangulation showing through.
 10. **An edge belongs to at most two faces.** A closed volume is a shell: each edge joins
     exactly two panels, an in-progress one has edges with zero or one. Three faces meeting along
-    one edge has no bevel angle to cut and no meaning for this tool. *(Proposed — confirm.)*
+    one edge has no bevel angle to cut and no meaning for this tool.
+
+    A corollary worth stating, since it shapes how splitting gets used: splitting a face adds
+    freedom to that face only. Its neighbours still impose their own planarity constraints
+    through the shared edges, so freeing a pinned vertex generally needs a matching split on at
+    least one adjoining face.
 
 **Enforcing constraint 9: constrained dragging**
 

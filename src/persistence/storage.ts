@@ -1,4 +1,5 @@
 import type { Design } from '../geometry/types';
+import type { RawDesign } from '../geometry/normalize';
 
 const STORAGE_KEY = 'volume-designer:design';
 const DEFAULT_PLANE_KEY = 'volume-designer:default-base-plane-in';
@@ -34,11 +35,13 @@ export function saveToLocalStorage(design: Design) {
   }
 }
 
-export function loadFromLocalStorage(): Design | null {
+// Parsed, not validated: `normalizeDesign` (via the store's loadDesign) is what decides
+// whether this is a usable design, so nothing here claims it already is one.
+export function loadFromLocalStorage(): RawDesign | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
-    return JSON.parse(raw) as Design;
+    return JSON.parse(raw) as RawDesign;
   } catch {
     return null;
   }
@@ -56,12 +59,12 @@ export function downloadDesignAsFile(design: Design, filename = 'volume-design.j
   URL.revokeObjectURL(url);
 }
 
-export function readDesignFromFile(file: File): Promise<Design> {
+export function readDesignFromFile(file: File): Promise<RawDesign> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        resolve(JSON.parse(reader.result as string) as Design);
+        resolve(JSON.parse(reader.result as string) as RawDesign);
       } catch (err) {
         reject(err);
       }

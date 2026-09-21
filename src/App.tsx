@@ -7,8 +7,10 @@ import { AnglesPanel } from './components/panels/AnglesPanel';
 import { HolesPanel } from './components/panels/HolesPanel';
 import { UnfoldPanel } from './components/panels/UnfoldPanel';
 import { DimensionsPanel } from './components/panels/DimensionsPanel';
+import { DesignIssuesBanner } from './components/panels/DesignIssuesBanner';
 import { useDesignStore } from './store/designStore';
 import { loadFromLocalStorage, saveToLocalStorage } from './persistence/storage';
+import { hasGeometry } from './geometry/normalize';
 import './App.css';
 
 function ModePanel() {
@@ -36,8 +38,8 @@ function App() {
     if (loadedInitial.current) return;
     loadedInitial.current = true;
     const saved = loadFromLocalStorage();
-    if (saved && (saved.vertices.length > 0 || saved.faces.length > 0)) {
-      loadDesign(saved);
+    if (hasGeometry(saved)) {
+      loadDesign(saved!);
     }
   }, [loadDesign]);
 
@@ -54,6 +56,7 @@ function App() {
           <Viewport />
         </div>
         <div className="side-panel">
+          <DesignIssuesBanner />
           <div className="side-panel-mode">
             <ModePanel />
           </div>

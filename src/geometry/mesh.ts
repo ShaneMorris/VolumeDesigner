@@ -32,21 +32,27 @@ export function faceEdgeKeys(face: Face): EdgeKey[] {
   return keys;
 }
 
-/** Every unique edge in the design, with the faces that reference it. */
+/**
+ * Every stored edge, paired with the faces that use it.
+ *
+ * Edges come from `design.edges` rather than from face loops, so an edge drawn on its own
+ * appears here with an empty `faceIds` — which is the point: connectivity exists before
+ * any face does (requirements §3).
+ */
 export function deriveEdges(design: Design): DerivedEdge[] {
   const map = new Map<EdgeKey, DerivedEdge>();
+  for (const edge of design.edges) {
+    const key = edgeKey(edge.a, edge.b);
+    if (!map.has(key)) map.set(key, { key, a: edge.a, b: edge.b, faceIds: [] });
+  }
   for (const face of design.faces) {
     const n = face.vertexIds.length;
     for (let i = 0; i < n; i++) {
-      const a = face.vertexIds[i];
-      const b = face.vertexIds[(i + 1) % n];
-      const key = edgeKey(a, b);
-      let edge = map.get(key);
-      if (!edge) {
-        edge = { key, a, b, faceIds: [] };
-        map.set(key, edge);
-      }
-      edge.faceIds.push(face.id);
+      const key = edgeKey(face.vertexIds[i], face.vertexIds[(i + 1) % n]);
+      // A face loop without a backing edge breaks constraint 8; validation reports it, and
+      // normalizing a design repairs it. Tolerate it here so rendering never hard-fails.
+      const edge = map.get(key);
+      if (edge) edge.faceIds.push(face.id);
     }
   }
   return [...map.values()];
