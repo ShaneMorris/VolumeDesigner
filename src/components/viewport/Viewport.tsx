@@ -445,26 +445,56 @@ function FaceMesh({ face }: { face: Face }) {
 
 function FaceEdges({ face }: { face: Face }) {
   const design = useDesignStore((s) => s.design);
+  const mode = useDesignStore((s) => s.mode);
+  const buildTool = useDesignStore((s) => s.buildTool);
   const selectedEdge = useDesignStore((s) => s.selectedEdge);
+  const selectedEdgePair = useDesignStore((s) => s.selectedEdgePair);
+  const selectEdgePair = useDesignStore((s) => s.selectEdgePair);
+  const handleRadius = useHandleRadius();
   const positions = facePositions(design, face);
   const points = [...positions, positions[0]].map((p) => new THREE.Vector3(p.x, p.y, p.z));
 
+  const pickable = mode === 'build' && buildTool === 'select';
   const n = face.vertexIds.length;
+
   return (
     <group>
       {Array.from({ length: n }).map((_, i) => {
         const a = face.vertexIds[i];
         const b = face.vertexIds[(i + 1) % n];
-        const isSelected =
-          selectedEdge &&
-          ((selectedEdge.a === a && selectedEdge.b === b) || (selectedEdge.a === b && selectedEdge.b === a));
+        const matches = (edge: { a: string; b: string } | null) =>
+          !!edge && ((edge.a === a && edge.b === b) || (edge.a === b && edge.b === a));
+        const isSelected = matches(selectedEdge) || matches(selectedEdgePair);
+
         return (
-          <Line
-            key={i}
-            points={[points[i], points[i + 1]]}
-            color={isSelected ? '#facc15' : '#1e293b'}
-            lineWidth={isSelected ? 3 : 1}
-          />
+          <group key={i}>
+            <Line
+              points={[points[i], points[i + 1]]}
+              color={isSelected ? '#facc15' : '#1e293b'}
+              lineWidth={isSelected ? 3 : 1}
+            />
+            {/* A line is a hairline to the raycaster, so picking rides on an invisible
+                cylinder around it — thick enough to hit without hunting for the pixel. */}
+            {pickable && (
+              <mesh
+                position={points[i].clone().add(points[i + 1]).multiplyScalar(0.5)}
+                quaternion={new THREE.Quaternion().setFromUnitVectors(
+                  new THREE.Vector3(0, 1, 0),
+                  points[i + 1].clone().sub(points[i]).normalize(),
+                )}
+                visible={false}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  selectEdgePair({ a, b });
+                }}
+              >
+                <cylinderGeometry
+                  args={[handleRadius * 0.7, handleRadius * 0.7, points[i].distanceTo(points[i + 1]), 6]}
+                />
+                <meshBasicMaterial />
+              </mesh>
+            )}
+          </group>
         );
       })}
     </group>
@@ -592,18 +622,44 @@ function CameraRig() {
   return null;
 }
 
-/** Esc abandons the face in progress, the way every drawing tool behaves. */
-function useEscapeCancelsDraft() {
-  const cancelDraft = useDesignStore((s) => s.cancelDraft);
+/** True while focus is in a text/number field, where keys belong to the field. */
+function isTypingInAField(): boolean {
+  const el = document.activeElement;
+  if (!el) return false;
+  const tag = el.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || (el as HTMLElement).isContentEditable;
+}
+
+/** Esc abandons the face in progress; Del removes whatever is selected. */
+function useViewportKeyboard() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      const { mode, buildTool, draftVertexIds } = useDesignStore.getState();
-      if (mode === 'build' && buildTool === 'draw' && draftVertexIds.length > 0) cancelDraft();
+      if (isTypingInAField()) return;
+      const store = useDesignStore.getState();
+
+      if (e.key === 'Escape') {
+        if (store.mode === 'build' && store.buildTool === 'draw' && store.draftVertexIds.length > 0) {
+          store.cancelDraft();
+        }
+        return;
+      }
+
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+      if (store.mode !== 'build' || store.buildTool !== 'select') return;
+      if (store.selectedEdgePair) {
+        e.preventDefault();
+        store.deleteEdge(store.selectedEdgePair.a, store.selectedEdgePair.b);
+      } else if (store.selectedVertexId) {
+        e.preventDefault();
+        store.deleteVertex(store.selectedVertexId);
+      } else if (store.selectedFaceId) {
+        e.preventDefault();
+        store.deleteFace(store.selectedFaceId);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [cancelDraft]);
+  }, []);
 }
 
 export function Viewport() {
@@ -613,7 +669,7 @@ export function Viewport() {
   const buildTool = useDesignStore((s) => s.buildTool);
   const cancelDraft = useDesignStore((s) => s.cancelDraft);
   const draggingVertexId = useDesignStore((s) => s.draggingVertexId);
-  useEscapeCancelsDraft();
+  useViewportKeyboard();
 
   return (
     <div

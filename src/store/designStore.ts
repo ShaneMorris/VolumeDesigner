@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { AngleLock, Design, Face, Hole, Vec3 } from '../geometry/types';
-import { BASE_PLANE_DEFAULT_IN, clampBasePlaneSize, createEmptyDesign } from '../geometry/types';
-import { deriveEdges, findSharedEdge, getFace, isFacePlanar } from '../geometry/mesh';
+import { BASE_PLANE_DEFAULT_IN, clampBasePlaneSize, createEmptyDesign, edgeKey } from '../geometry/types';
+import { deriveEdges, faceEdgeKeys, findSharedEdge, getFace, isFacePlanar } from '../geometry/mesh';
 import { setEdgeLengthByMovingVertex, setInteriorAngleAtVertex, extrudeFace } from '../geometry/edit';
 import { solveDihedralAngle } from '../geometry/solver';
 import { reapplyAngleLocks } from '../geometry/relax';
@@ -40,6 +40,8 @@ interface DesignStoreState {
   selectedVertexId: string | null;
   selectedFaceId: string | null;
   selectedEdge: SelectedEdge | null;
+  /** Edge picked in Build mode, by its two corners. Any edge qualifies, shared or not. */
+  selectedEdgePair: { a: string; b: string } | null;
   selectedHoleId: string | null;
 
   // Base polygon sketch draft (raw positions, not yet committed to the design)
@@ -54,6 +56,8 @@ interface DesignStoreState {
   /** Typed-in constraints for the pending point; null means "follow the cursor". */
   lockedLengthIn: number | null;
   lockedAngleDeg: number | null;
+  /** Points this draft created, so abandoning it removes exactly those. */
+  draftCreatedVertexIds: string[];
   buildTool: BuildTool;
   /** Vertex currently being click-dragged with the Move tool, if any. */
   draggingVertexId: string | null;
@@ -71,6 +75,7 @@ interface DesignStoreState {
   selectVertex: (id: string | null) => void;
   selectFace: (id: string | null) => void;
   selectEdge: (edge: SelectedEdge | null) => void;
+  selectEdgePair: (pair: { a: string; b: string } | null) => void;
   selectHole: (id: string | null) => void;
 
   // Sketch mode
@@ -116,6 +121,8 @@ interface DesignStoreState {
   renameFace: (id: string, label: string) => void;
 
   deleteFace: (id: string) => void;
+  deleteVertex: (id: string) => void;
+  deleteEdge: (aVertexId: string, bVertexId: string) => void;
 
   undo: () => void;
   redo: () => void;
@@ -149,20 +156,37 @@ function pendingPointOf(s: DesignStoreState): Vec3 | null {
 }
 
 /**
- * Drops vertices no face refers to. Points are added to the design as they're placed, so
- * abandoning a half-drawn face would otherwise strand every one of them in the model —
- * invisible clutter that also skews anything measuring the model's size.
+ * Drops the points a half-drawn face created, when that face is abandoned. Points are
+ * added to the design as they're placed, so without this they'd be stranded in the model.
+ *
+ * Only the draft's own creations are removed, never every unused vertex: deleting an edge
+ * deliberately leaves its corners behind so the faces can be redrawn on them, and a blunt
+ * "remove anything no face uses" sweep would wipe exactly those on the next tool switch.
  */
-function pruneOrphanVertices(design: Design): Design {
+function discardDraftVertices(design: Design, draftCreatedVertexIds: string[]): Design {
+  if (draftCreatedVertexIds.length === 0) return design;
   const used = new Set<string>();
   for (const face of design.faces) for (const id of face.vertexIds) used.add(id);
-  if (design.vertices.every((v) => used.has(v.id))) return design;
-  return { ...design, vertices: design.vertices.filter((v) => used.has(v.id)) };
+  const doomed = new Set(draftCreatedVertexIds.filter((id) => !used.has(id)));
+  if (doomed.size === 0) return design;
+  return { ...design, vertices: design.vertices.filter((v) => !doomed.has(v.id)) };
+}
+
+/** Removes faces along with the holes, angle locks and base reference that depended on them. */
+function removeFaces(design: Design, faceIds: Set<string>): Design {
+  return {
+    ...design,
+    faces: design.faces.filter((f) => !faceIds.has(f.id)),
+    holes: design.holes.filter((h) => !faceIds.has(h.faceId)),
+    angleLocks: design.angleLocks.filter((l) => !faceIds.has(l.faceAId) && !faceIds.has(l.faceBId)),
+    baseFaceId: design.baseFaceId && faceIds.has(design.baseFaceId) ? null : design.baseFaceId,
+  };
 }
 
 /** Resets everything about a face-in-progress. */
 const CLEARED_DRAW_STATE = {
   draftVertexIds: [] as string[],
+  draftCreatedVertexIds: [] as string[],
   drawPlane: null,
   drawCursor: null,
   lockedLengthIn: null,
@@ -184,6 +208,7 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
   selectedVertexId: null,
   selectedFaceId: null,
   selectedEdge: null,
+  selectedEdgePair: null,
   selectedHoleId: null,
 
   openSketch: [],
@@ -192,6 +217,7 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
   drawCursor: null,
   lockedLengthIn: null,
   lockedAngleDeg: null,
+  draftCreatedVertexIds: [],
   buildTool: 'select',
   draggingVertexId: null,
   frameNonce: 0,
@@ -202,9 +228,10 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
 
   setMode: (mode) => set({ mode }),
 
-  selectVertex: (id) => set({ selectedVertexId: id }),
-  selectFace: (id) => set({ selectedFaceId: id }),
+  selectVertex: (id) => set({ selectedVertexId: id, selectedEdgePair: null }),
+  selectFace: (id) => set({ selectedFaceId: id, selectedEdgePair: null }),
   selectEdge: (edge) => set({ selectedEdge: edge }),
+  selectEdgePair: (pair) => set({ selectedEdgePair: pair, selectedVertexId: null, selectedFaceId: null }),
   selectHole: (id) => set({ selectedHoleId: id }),
 
   addSketchPoint: (p) => set((s) => ({ openSketch: [...s.openSketch, p] })),
@@ -284,6 +311,7 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
       return {
         design: nextDesign,
         draftVertexIds,
+        draftCreatedVertexIds: [...s.draftCreatedVertexIds, id],
         // Three points fix the face's plane, so drawing switches onto it and every
         // later point lands coplanar — which is what keeps the face unfoldable.
         drawPlane: planeOfDraft(nextDesign, draftVertexIds) ?? s.drawPlane,
@@ -298,7 +326,11 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
     set((s) =>
       tool === s.buildTool
         ? {}
-        : { buildTool: tool, ...CLEARED_DRAW_STATE, design: pruneOrphanVertices(s.design) },
+        : {
+            buildTool: tool,
+            ...CLEARED_DRAW_STATE,
+            design: discardDraftVertices(s.design, s.draftCreatedVertexIds),
+          },
     ),
 
   setDraggingVertexId: (id) => set({ draggingVertexId: id }),
@@ -323,7 +355,11 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
     set((s) => {
       const id = makeId('v');
       const nextDesign: Design = { ...s.design, vertices: [...s.design.vertices, { id, position: p }] };
-      return { design: nextDesign, draftVertexIds: [...s.draftVertexIds, id] };
+      return {
+        design: nextDesign,
+        draftVertexIds: [...s.draftVertexIds, id],
+        draftCreatedVertexIds: [...s.draftCreatedVertexIds, id],
+      };
     }),
 
   closeDraftFace: (label) =>
@@ -338,7 +374,11 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
       return { ...commit(s, nextDesign), ...CLEARED_DRAW_STATE, selectedFaceId: face.id };
     }),
 
-  cancelDraft: () => set((s) => ({ ...CLEARED_DRAW_STATE, design: pruneOrphanVertices(s.design) })),
+  cancelDraft: () =>
+    set((s) => ({
+      ...CLEARED_DRAW_STATE,
+      design: discardDraftVertices(s.design, s.draftCreatedVertexIds),
+    })),
 
   pullUpFace: (faceId, heightIn) =>
     set((s) => {
@@ -448,6 +488,51 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
         baseFaceId: s.design.baseFaceId === id ? null : s.design.baseFaceId,
       };
       return { ...commit(s, nextDesign), selectedFaceId: null };
+    }),
+
+  /**
+   * Removes a vertex and every face that used it as a corner — a face can't simply lose
+   * a corner, so the faces go with it. Other corners of those faces are kept, ready to
+   * redraw on.
+   */
+  deleteVertex: (id) =>
+    set((s) => {
+      if (!s.design.vertices.some((v) => v.id === id)) return {};
+      const touching = new Set(
+        s.design.faces.filter((f) => f.vertexIds.includes(id)).map((f) => f.id),
+      );
+      const withoutFaces = removeFaces(s.design, touching);
+      const nextDesign: Design = {
+        ...withoutFaces,
+        vertices: withoutFaces.vertices.filter((v) => v.id !== id),
+      };
+      return {
+        ...commit(s, nextDesign),
+        selectedVertexId: null,
+        selectedFaceId: null,
+        selectedEdge: null,
+        selectedEdgePair: null,
+      };
+    }),
+
+  /**
+   * Removes the faces meeting along an edge but leaves its two corners in place, so the
+   * geometry can be redrawn from the same points. Edges aren't stored — they exist only
+   * as consecutive pairs in a face loop — so dropping those faces is what removes it.
+   */
+  deleteEdge: (aVertexId, bVertexId) =>
+    set((s) => {
+      const key = edgeKey(aVertexId, bVertexId);
+      const adjoining = new Set(
+        s.design.faces.filter((f) => faceEdgeKeys(f).includes(key)).map((f) => f.id),
+      );
+      if (adjoining.size === 0) return {};
+      return {
+        ...commit(s, removeFaces(s.design, adjoining)),
+        selectedFaceId: null,
+        selectedEdge: null,
+        selectedEdgePair: null,
+      };
     }),
 
   undo: () =>

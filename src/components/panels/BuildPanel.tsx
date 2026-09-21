@@ -11,7 +11,7 @@ const TOOL_LABELS: Record<BuildTool, string> = {
 };
 
 const TOOL_HINTS: Record<BuildTool, string> = {
-  select: 'Click a vertex or face to select it for the numeric inspector, locking, or the pull-up shortcut.',
+  select: 'Click a vertex, edge or face to select it — for the numeric inspector, locking, the pull-up shortcut, or deleting. Del removes the selection.',
   move: 'Click and drag any vertex to move it. Dragging slides it horizontally; hold Shift while dragging to move it straight up and down. Locked vertices stay put.',
   draw: 'Click an existing point to start a face. A line then follows the cursor — click to place each next point, typing an exact length/angle first if you want. Connecting the line back to any existing point closes the face (Shift-click to route through it and keep drawing instead). Esc cancels.',
 };
@@ -30,12 +30,32 @@ export function BuildPanel() {
   const setBuildTool = useDesignStore((s) => s.setBuildTool);
   const keepFacesFlat = useDesignStore((s) => s.keepFacesFlat);
   const setKeepFacesFlat = useDesignStore((s) => s.setKeepFacesFlat);
+  const selectedEdgePair = useDesignStore((s) => s.selectedEdgePair);
+  const deleteVertex = useDesignStore((s) => s.deleteVertex);
+  const deleteEdge = useDesignStore((s) => s.deleteEdge);
 
   const [pullHeight, setPullHeight] = useState(3);
   const selectedFace = design.faces.find((f) => f.id === selectedFaceId);
   const baseFace = design.faces.find((f) => f.id === design.baseFaceId);
   const baseVertices = baseFace ? design.vertices.filter((v) => baseFace.vertexIds.includes(v.id)) : [];
   const baseFullyLocked = baseVertices.length > 0 && baseVertices.every((v) => v.locked);
+
+  // How much a delete would take with it, so the count is visible before committing.
+  const facesOnSelectedVertex = selectedVertexId
+    ? design.faces.filter((f) => f.vertexIds.includes(selectedVertexId))
+    : [];
+  const facesOnSelectedEdge = selectedEdgePair
+    ? design.faces.filter((f) => {
+        const n = f.vertexIds.length;
+        return f.vertexIds.some((id, i) => {
+          const next = f.vertexIds[(i + 1) % n];
+          return (
+            (id === selectedEdgePair.a && next === selectedEdgePair.b) ||
+            (id === selectedEdgePair.b && next === selectedEdgePair.a)
+          );
+        });
+      })
+    : [];
 
   return (
     <div>
@@ -107,6 +127,31 @@ export function BuildPanel() {
         </>
       )}
 
+      {selectedEdgePair && (
+        <>
+          <hr />
+          <div className="inspector-group-title">Selected edge</div>
+          <p className="panel-hint">
+            Deleting an edge removes the {facesOnSelectedEdge.length === 1 ? 'face' : 'faces'} meeting along it
+            but keeps both corners, so you can redraw on the same points.
+          </p>
+          <div className="status-row">
+            Removes {facesOnSelectedEdge.length}{' '}
+            {facesOnSelectedEdge.length === 1 ? 'face' : 'faces'}
+            {facesOnSelectedEdge.length > 0 && `: ${facesOnSelectedEdge.map((f) => f.label).join(', ')}`}
+          </div>
+          <div className="button-row">
+            <button
+              className="danger"
+              disabled={facesOnSelectedEdge.length === 0}
+              onClick={() => deleteEdge(selectedEdgePair.a, selectedEdgePair.b)}
+            >
+              Delete edge
+            </button>
+          </div>
+        </>
+      )}
+
       {selectedFace && (
         <>
           <hr />
@@ -137,6 +182,20 @@ export function BuildPanel() {
         <>
           <hr />
           <VertexInspector />
+          <p className="panel-hint">
+            A face can't lose a corner, so deleting this point also removes every face using it. The other
+            corners of those faces stay behind, ready to redraw on.
+          </p>
+          <div className="status-row">
+            Removes {facesOnSelectedVertex.length}{' '}
+            {facesOnSelectedVertex.length === 1 ? 'face' : 'faces'}
+            {facesOnSelectedVertex.length > 0 && `: ${facesOnSelectedVertex.map((f) => f.label).join(', ')}`}
+          </div>
+          <div className="button-row">
+            <button className="danger" onClick={() => deleteVertex(selectedVertexId)}>
+              Delete point
+            </button>
+          </div>
         </>
       )}
     </div>

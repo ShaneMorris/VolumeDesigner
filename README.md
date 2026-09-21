@@ -33,7 +33,11 @@ The toolbar's five modes match the spec's workflow:
    ground plane an enormous distance away, and a point stranded out there is both
    invisible and disruptive (it used to inflate every on-screen handle).
 2. **Build Faces** — three CAD-style tools:
-   - **Select** — pick a vertex or face for the numeric inspector, locking, or pull-up.
+   - **Select** — pick a vertex, edge or face for the numeric inspector, locking, the
+     pull-up shortcut, or deleting (Del also works). Deleting a **vertex** takes every
+     face using it, since a face can't simply lose a corner; deleting an **edge** takes
+     only the faces meeting along it and leaves both corners in place, so the geometry
+     can be redrawn on the same points.
    - **Move** — click and drag a vertex to reshape every face touching it, live.
      Dragging slides it horizontally; hold Shift to move it straight up/down. Locked
      vertices don't budge.
