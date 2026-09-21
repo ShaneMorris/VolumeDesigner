@@ -28,6 +28,8 @@ export function BuildPanel() {
   const setVerticesLocked = useDesignStore((s) => s.setVerticesLocked);
   const buildTool = useDesignStore((s) => s.buildTool);
   const setBuildTool = useDesignStore((s) => s.setBuildTool);
+  const keepFacesFlat = useDesignStore((s) => s.keepFacesFlat);
+  const setKeepFacesFlat = useDesignStore((s) => s.setKeepFacesFlat);
 
   const [pullHeight, setPullHeight] = useState(3);
   const selectedFace = design.faces.find((f) => f.id === selectedFaceId);
@@ -49,6 +51,21 @@ export function BuildPanel() {
         ))}
       </div>
       <p className="panel-hint">{TOOL_HINTS[buildTool]}</p>
+
+      <label className="checkbox-row">
+        <input
+          type="checkbox"
+          checked={keepFacesFlat}
+          onChange={(e) => setKeepFacesFlat(e.target.checked)}
+        />
+        Keep faces flat
+      </label>
+      <p className="panel-hint">
+        Four corners don't generally share a plane, so moving one warps every face it belongs to — which shows
+        as a crease and forces the unfolder to approximate that panel. With this on, the neighbouring corners
+        shift just enough to keep all the faces flat. The corner you're dragging, any locked corners, and the
+        base face all stay exactly put.
+      </p>
 
       {buildTool === 'draw' && (
         <>

@@ -31,6 +31,15 @@ The toolbar's five modes match the spec's workflow:
    - **Move** — click and drag a vertex to reshape every face touching it, live.
      Dragging slides it horizontally; hold Shift to move it straight up/down. Locked
      vertices don't budge.
+
+     "Keep faces flat" (on by default) stops a drag from warping faces. Four corners
+     don't generally share a plane, so moving one warps every face it belongs to — a
+     crease along the renderer's triangulation diagonal, and a panel the unfolder has to
+     approximate. The model is relaxed instead: each warped face's free corners are
+     projected onto its best-fit plane, repeatedly, until everything settles. Correcting
+     only the dragged corner's own faces isn't enough — whichever corner absorbs the fix
+     belongs to further faces that then warp in turn, the base among them. The dragged
+     corner, locked corners, and the base face are all held fixed throughout.
    - **Draw** — click an existing point to start a face; a line then follows the cursor.
      Click to place each next point, click the first point again (3+ points) to close
      the face, Esc to cancel. While a segment is live, a sidebar dialog reads out its
@@ -63,8 +72,9 @@ the current solid.
 
 - `src/geometry/` — the core engine, framework-free and unit-tested (`vitest`):
   vertex/face/hole data model, dihedral angle measurement, the angle-lock rotation
-  solver, planarity check, face unfolding (planar projection, or a non-planar
-  fan-triangulated true-length approximation), and corner miter correction.
+  solver, planarity check and the flatness relaxation, face unfolding (planar
+  projection, or a non-planar fan-triangulated true-length approximation), and corner
+  miter correction.
 - `src/store/designStore.ts` — a Zustand store wrapping the design with selection
   state, undo/redo, and the mode-specific in-progress drafts (open sketch, face-build
   chain).

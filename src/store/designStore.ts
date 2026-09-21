@@ -7,6 +7,7 @@ import { solveDihedralAngle } from '../geometry/solver';
 import { reapplyAngleLocks } from '../geometry/relax';
 import { regularPolygonPoints } from '../geometry/polygons';
 import { planeThroughPoints, resolveNextPoint, type DrawPlane } from '../geometry/drawPlane';
+import { keepFacesPlanar } from '../geometry/planarize';
 
 export type Mode = 'sketch' | 'build' | 'angles' | 'holes' | 'unfold';
 
@@ -57,6 +58,8 @@ interface DesignStoreState {
   draggingVertexId: string | null;
   /** Bumped to ask the viewport to re-frame the camera around the model. */
   frameNonce: number;
+  /** Whether moving a corner auto-adjusts a quad's opposite corner to keep it flat. */
+  keepFacesFlat: boolean;
 
   // Undo/redo
   past: HistoryEntry[];
@@ -90,6 +93,7 @@ interface DesignStoreState {
   setBuildTool: (tool: BuildTool) => void;
   setDraggingVertexId: (id: string | null) => void;
   frameView: () => void;
+  setKeepFacesFlat: (keep: boolean) => void;
 
   moveVertex: (id: string, position: Vec3, opts?: { commit?: boolean }) => void;
   setVertexLocked: (id: string, locked: boolean) => void;
@@ -177,6 +181,7 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
   buildTool: 'select',
   draggingVertexId: null,
   frameNonce: 0,
+  keepFacesFlat: true,
 
   past: [],
   future: [],
@@ -281,6 +286,8 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
 
   frameView: () => set((s) => ({ frameNonce: s.frameNonce + 1 })),
 
+  setKeepFacesFlat: (keep) => set({ keepFacesFlat: keep }),
+
   addDraftVertexById: (vertexId) =>
     set((s) => {
       if (s.draftVertexIds.includes(vertexId)) return {};
@@ -329,7 +336,10 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
         ...s.design,
         vertices: s.design.vertices.map((v) => (v.id === id ? { ...v, position } : v)),
       };
-      const relaxed = reapplyAngleLocks(movedDesign);
+      const flattened = s.keepFacesFlat ? keepFacesPlanar(movedDesign, id) : movedDesign;
+      // Angle locks run last: the spec is explicit that a locked angle is never
+      // silently broken, so it outranks the flatness correction when they disagree.
+      const relaxed = reapplyAngleLocks(flattened);
       if (opts?.commit) {
         return commit(s, relaxed);
       }
@@ -356,7 +366,8 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
   setEdgeLength: (anchorVertexId, movingVertexId, lengthIn) =>
     set((s) => {
       const moved = setEdgeLengthByMovingVertex(s.design, anchorVertexId, movingVertexId, lengthIn);
-      const relaxed = reapplyAngleLocks(moved);
+      const flattened = s.keepFacesFlat ? keepFacesPlanar(moved, movingVertexId) : moved;
+      const relaxed = reapplyAngleLocks(flattened);
       return commit(s, relaxed);
     }),
 
