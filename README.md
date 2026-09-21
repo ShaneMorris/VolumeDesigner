@@ -22,14 +22,23 @@ explicitly.
 
 The toolbar's five modes match the spec's workflow:
 
-1. **Sketch Base** — click the ground grid to place the base polygon's vertices (3+),
-   then "Close Shape". Once closed, select any vertex to edit its adjacent edge
-   lengths and interior angle numerically.
-2. **Build Faces** — click an existing vertex to start a new face, keep clicking
-   vertices to add edges, click the first vertex again to close the face. Drag a
-   selected vertex (translate gizmo) to reshape every face that touches it, live. The
-   "pull-up" shortcut extrudes the selected base face straight up by a numeric height —
-   available, never automatic.
+1. **Sketch Base** — start from a preset regular polygon (triangle, square, pentagon,
+   hexagon, octagon) at a given width, or click the ground grid to place vertices by
+   hand (3+) and hit "Close Shape". Either way, select a vertex afterward to edit its
+   adjacent edge lengths and interior angle numerically.
+2. **Build Faces** — three CAD-style tools:
+   - **Select** — pick a vertex or face for the numeric inspector, locking, or pull-up.
+   - **Move** — click and drag a vertex to reshape every face touching it, live.
+     Dragging slides it horizontally; hold Shift to move it straight up/down. Locked
+     vertices don't budge.
+   - **Draw** — click a vertex to start a face, keep clicking to add edges (snapping to
+     existing vertices, or dropping new points on the work plane), and click the first
+     vertex again to close it. The work plane's height is settable, a ghost marker
+     previews exactly where the next point lands, and points can also be entered as
+     exact X/Y coordinates.
+
+   The "pull-up" shortcut extrudes the selected base face straight up by a numeric
+   height — available, never automatic.
 3. **Angles** — click one face then an adjacent face to select their shared edge and
    see its live dihedral (bevel) angle. Type an exact value (or use a preset) to lock
    it; the solver rotates the second face's vertices about that shared edge until the
@@ -55,7 +64,13 @@ the current solid.
 - `src/components/viewport/` — the Three.js/`@react-three/fiber` 3D scene.
 - `src/components/panels/` — the per-mode side panels and the always-on dimensions
   table.
-- `src/export/dxf.ts` — DXF (R12-family ASCII, inches) via `dxf-writer`.
+- `src/export/dxfWriter.ts` / `dxf.ts` — a small hand-written AutoCAD R12 (AC1009)
+  ASCII DXF writer. Deliberately not library-generated: `dxf-writer` emits AC1021 with
+  LWPOLYLINE entities and stringifies coordinates with plain JS formatting, which
+  produces values like `5.551115123125783e-17` for floating-point near-zeros. DXF
+  readers expect plain decimal reals and reject exponent notation, so those files
+  failed to import. This writer formats every real as fixed decimal, snaps near-zeros,
+  and refuses non-finite or implausible coordinates outright.
 - `src/persistence/` — localStorage autosave and JSON file save/load.
 
 ## Scope notes / judgment calls
@@ -72,8 +87,9 @@ A few things the spec left open, resolved pragmatically for v1:
   calls out the single-edge solver as the piece to validate early, which is what's
   covered by the geometry test suite.
 - **Corner miter correction** — implemented per the spec's "recommendation" framing:
-  offsets each beveled edge outward by `(thickness/2) * tan((180 - bevel)/2)` and
-  re-intersects adjacent offset edges for the corner point. This assumes a specific
+  offsets each beveled edge outward by `(thickness/2) * tan((180 - bevel)/2)` (capped at
+  a few panel thicknesses, since that tangent runs away toward infinity as the fold
+  angle approaches zero) and re-intersects adjacent offset edges for the corner point. This assumes a specific
   outer-face reference convention; verify against a physical test part before trusting
   it at tight tolerances (it's a toggle in the Unfold panel, on by default).
 - **Hole coordinate reference** — X/Y are relative to the face's first vertex, with X

@@ -5,8 +5,12 @@ import { deriveEdges, findSharedEdge, getFace, isFacePlanar } from '../geometry/
 import { setEdgeLengthByMovingVertex, setInteriorAngleAtVertex, extrudeFace } from '../geometry/edit';
 import { solveDihedralAngle } from '../geometry/solver';
 import { reapplyAngleLocks } from '../geometry/relax';
+import { regularPolygonPoints } from '../geometry/polygons';
 
 export type Mode = 'sketch' | 'build' | 'angles' | 'holes' | 'unfold';
+
+/** Build mode's active tool, in the CAD sense: pick, move, or draw geometry. */
+export type BuildTool = 'select' | 'move' | 'draw';
 
 let idCounter = 0;
 function makeId(prefix: string): string {
@@ -43,6 +47,11 @@ interface DesignStoreState {
   // Height (Z) of the horizontal work plane new draft vertices are placed on when
   // clicking empty space in Build mode.
   workPlaneZ: number;
+  buildTool: BuildTool;
+  /** Vertex currently being click-dragged with the Move tool, if any. */
+  draggingVertexId: string | null;
+  /** Bumped to ask the viewport to re-frame the camera around the model. */
+  frameNonce: number;
 
   // Undo/redo
   past: HistoryEntry[];
@@ -60,6 +69,7 @@ interface DesignStoreState {
   undoSketchPoint: () => void;
   closeSketch: (label?: string) => void;
   clearSketch: () => void;
+  createBasePolygon: (sides: number, widthIn: number) => void;
 
   // Build mode
   startDraftAtVertex: (vertexId: string) => void;
@@ -69,6 +79,9 @@ interface DesignStoreState {
   cancelDraft: () => void;
   pullUpFace: (faceId: string, heightIn: number) => void;
   setWorkPlaneZ: (z: number) => void;
+  setBuildTool: (tool: BuildTool) => void;
+  setDraggingVertexId: (id: string | null) => void;
+  frameView: () => void;
 
   moveVertex: (id: string, position: Vec3, opts?: { commit?: boolean }) => void;
   setVertexLocked: (id: string, locked: boolean) => void;
@@ -117,6 +130,9 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
   openSketch: [],
   draftVertexIds: [],
   workPlaneZ: 0,
+  buildTool: 'select',
+  draggingVertexId: null,
+  frameNonce: 0,
 
   past: [],
   future: [],
@@ -147,6 +163,32 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
       return { ...commit(s, nextDesign), openSketch: [], selectedFaceId: face.id };
     }),
 
+  // Starts a fresh design from a regular polygon base — the callers confirm first when
+  // there's existing geometry to discard.
+  createBasePolygon: (sides, widthIn) =>
+    set((s) => {
+      const points = regularPolygonPoints(sides, widthIn);
+      const vertexIds = points.map(() => makeId('v'));
+      const face: Face = { id: makeId('f'), vertexIds, label: 'Base' };
+      const nextDesign: Design = {
+        ...createEmptyDesign(),
+        panelThicknessIn: s.design.panelThicknessIn,
+        vertices: points.map((position, i) => ({ id: vertexIds[i], position })),
+        faces: [face],
+        baseFaceId: face.id,
+      };
+      return {
+        ...commit(s, nextDesign),
+        openSketch: [],
+        draftVertexIds: [],
+        frameNonce: s.frameNonce + 1,
+        selectedFaceId: face.id,
+        selectedVertexId: null,
+        selectedEdge: null,
+        selectedHoleId: null,
+      };
+    }),
+
   startDraftAtVertex: (vertexId) =>
     set((s) => {
       const vertex = s.design.vertices.find((v) => v.id === vertexId);
@@ -154,6 +196,14 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
     }),
 
   setWorkPlaneZ: (z) => set({ workPlaneZ: z }),
+
+  // Switching tools abandons any half-drawn face, so the draft can't be left dangling
+  // in a tool that has no way to finish it.
+  setBuildTool: (tool) => set((s) => (tool === s.buildTool ? {} : { buildTool: tool, draftVertexIds: [] })),
+
+  setDraggingVertexId: (id) => set({ draggingVertexId: id }),
+
+  frameView: () => set((s) => ({ frameNonce: s.frameNonce + 1 })),
 
   addDraftVertexById: (vertexId) =>
     set((s) => {

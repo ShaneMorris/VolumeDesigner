@@ -20,6 +20,7 @@ export function Toolbar() {
   const design = useDesignStore((s) => s.design);
   const loadDesign = useDesignStore((s) => s.loadDesign);
   const resetDesign = useDesignStore((s) => s.resetDesign);
+  const frameView = useDesignStore((s) => s.frameView);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -39,6 +40,9 @@ export function Toolbar() {
         </button>
         <button disabled={future.length === 0} onClick={redo} title="Redo">
           ↷ Redo
+        </button>
+        <button onClick={frameView} title="Zoom the camera to fit the whole model">
+          ⤢ Fit view
         </button>
         <button
           onClick={() => {

@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Canvas, useThree, type ThreeEvent } from '@react-three/fiber';
-import { OrbitControls, TransformControls, Line } from '@react-three/drei';
+import { OrbitControls, Line } from '@react-three/drei';
 import * as THREE from 'three';
 import { useDesignStore } from '../../store/designStore';
 import type { Face, Vec3 } from '../../geometry/types';
@@ -20,6 +20,7 @@ function GroundGrid() {
 }
 
 function SketchPreview() {
+  const sketchRadius = useHandleRadius();
   const openSketch = useDesignStore((s) => s.openSketch);
   const addSketchPoint = useDesignStore((s) => s.addSketchPoint);
   const mode = useDesignStore((s) => s.mode);
@@ -47,7 +48,7 @@ function SketchPreview() {
       {points.length >= 2 && <Line points={points} color="#f5a623" dashed={false} lineWidth={2} />}
       {points.map((p, i) => (
         <mesh key={i} position={p}>
-          <sphereGeometry args={[0.03, 12, 12]} />
+          <sphereGeometry args={[sketchRadius, 12, 12]} />
           <meshBasicMaterial color={i === 0 ? '#4ade80' : '#f5a623'} />
         </mesh>
       ))}
@@ -55,48 +56,159 @@ function SketchPreview() {
   );
 }
 
+/** Snap a work-plane coordinate to the 1/8in grid. */
+function snapToGrid(value: number): number {
+  return Math.round(value * 8) / 8;
+}
+
 /**
- * Build mode's "draw into empty space" surface: an adjustable horizontal plane at
- * `workPlaneZ` that clicks are projected onto to create new draft vertices, plus a
- * visible marker grid so it's clear where in space clicks will land. Only live while a
- * face is actively being drafted (a chain needs a starting, existing vertex first).
+ * Handle radius scaled to the model, so grab targets stay a consistent apparent size
+ * whether the volume is 3in or 30in across — a fixed radius is an unclickable speck on
+ * a large base and a blob on a small one.
+ */
+function useHandleRadius(): number {
+  const design = useDesignStore((s) => s.design);
+  return useMemo(() => {
+    let extent = 0;
+    for (const v of design.vertices) {
+      extent = Math.max(extent, Math.abs(v.position.x), Math.abs(v.position.y), Math.abs(v.position.z));
+    }
+    return Math.min(0.5, Math.max(0.05, extent * 0.02));
+  }, [design.vertices]);
+}
+
+/**
+ * Size of the drawing work plane: big enough to cover the model with room to grow, but
+ * deliberately *finite*. An infinite plane meant a click aimed near the horizon hit it
+ * at an enormous distance, dropping points far out in space — the plane has to end
+ * somewhere the user can see.
+ */
+function useWorkPlaneSize(): number {
+  const design = useDesignStore((s) => s.design);
+  return useMemo(() => {
+    let extent = 12;
+    for (const v of design.vertices) {
+      extent = Math.max(extent, Math.abs(v.position.x), Math.abs(v.position.y));
+    }
+    return Math.ceil((extent + 12) * 2);
+  }, [design.vertices]);
+}
+
+/**
+ * Build mode's "draw into empty space" surface: a bounded horizontal plane at
+ * `workPlaneZ` that clicks are projected onto to create new draft vertices, with a grid
+ * and a live ghost marker showing exactly where the next point will land.
  */
 function BuildWorkPlane() {
-  const mode = useDesignStore((s) => s.mode);
   const draftVertexIds = useDesignStore((s) => s.draftVertexIds);
   const workPlaneZ = useDesignStore((s) => s.workPlaneZ);
   const addDraftNewVertex = useDesignStore((s) => s.addDraftNewVertex);
+  const size = useWorkPlaneSize();
+  const handleRadius = useHandleRadius();
+  const [preview, setPreview] = useState<{ x: number; y: number } | null>(null);
 
-  if (mode !== 'build' || draftVertexIds.length === 0) return null;
+  if (draftVertexIds.length === 0) return null;
 
-  // The click-catcher mesh below is itself positioned at z = workPlaneZ (via the group's
-  // transform), so the raycast hit point e.point already lands exactly on that plane.
-  //
-  // Because the plane is infinite, a ray aimed at a vertex/face elsewhere in the scene
-  // can still cross this plane at some other, unrelated point first — geometrically
-  // "nearer" even though the user visually clicked on that other object. Whenever the
-  // same click also hit a vertex or face handle (anywhere along the ray, not just the
-  // nearest hit), defer to it: don't drop a stray point, and don't stop propagation, so
-  // that farther handle's own onClick still fires normally.
+  // A click that also hit a vertex or face handle anywhere along the ray belongs to that
+  // handle, not to the plane: don't drop a stray point, and don't stop propagation, so
+  // the handle's own onClick still fires even though it may be farther from the camera.
+  const clickBelongsToHandle = (e: ThreeEvent<MouseEvent>) =>
+    e.intersections.some((i) => i.object.userData?.isVertexHandle || i.object.userData?.isFaceHandle);
+
   const onPlaneClick = (e: ThreeEvent<MouseEvent>) => {
-    const hitsHandle = e.intersections.some(
-      (i) => i.object.userData?.isVertexHandle || i.object.userData?.isFaceHandle,
-    );
-    if (hitsHandle) return;
+    if (clickBelongsToHandle(e)) return;
     e.stopPropagation();
-    const snapped = { x: Math.round(e.point.x * 8) / 8, y: Math.round(e.point.y * 8) / 8, z: workPlaneZ };
-    addDraftNewVertex(snapped);
+    addDraftNewVertex({ x: snapToGrid(e.point.x), y: snapToGrid(e.point.y), z: workPlaneZ });
   };
 
   return (
     <group position={[0, 0, workPlaneZ]}>
-      <mesh onClick={onPlaneClick}>
-        <planeGeometry args={[1000, 1000]} />
-        <meshBasicMaterial color="#7dd3fc" transparent opacity={0.06} side={THREE.DoubleSide} />
+      <mesh
+        onClick={onPlaneClick}
+        onPointerMove={(e) => setPreview({ x: snapToGrid(e.point.x), y: snapToGrid(e.point.y) })}
+        onPointerOut={() => setPreview(null)}
+      >
+        <planeGeometry args={[size, size]} />
+        <meshBasicMaterial color="#7dd3fc" transparent opacity={0.07} side={THREE.DoubleSide} />
       </mesh>
-      <gridHelper args={[40, 40, '#7dd3fc', '#334155']} rotation={[Math.PI / 2, 0, 0]} />
+      <gridHelper args={[size, size, '#7dd3fc', '#334155']} rotation={[Math.PI / 2, 0, 0]} />
+      {preview && (
+        <mesh position={[preview.x, preview.y, 0]}>
+          <sphereGeometry args={[handleRadius, 12, 12]} />
+          <meshBasicMaterial color="#fbbf24" transparent opacity={0.85} />
+        </mesh>
+      )}
     </group>
   );
+}
+
+/**
+ * Click-drag movement for the Move tool. Pointer moves are tracked on the window rather
+ * than on scene objects so the drag survives the cursor leaving the (small) vertex
+ * sphere. Dragging is horizontal by default — along the plane through the vertex — and
+ * vertical (Z only) while Shift is held, which is the pair of constraints that actually
+ * matter for these shapes.
+ */
+function VertexDragHandler() {
+  const { camera, gl } = useThree();
+  const draggingVertexId = useDesignStore((s) => s.draggingVertexId);
+  const setDraggingVertexId = useDesignStore((s) => s.setDraggingVertexId);
+
+  useEffect(() => {
+    if (!draggingVertexId) return;
+
+    const start = useDesignStore.getState().design.vertices.find((v) => v.id === draggingVertexId)?.position;
+    if (!start) return;
+
+    const canvas = gl.domElement;
+    const raycaster = new THREE.Raycaster();
+    const ndc = new THREE.Vector2();
+    const horizontalPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -start.z);
+    const hit = new THREE.Vector3();
+
+    const onMove = (ev: PointerEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      ndc.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+      ndc.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(ndc, camera);
+      const ray = raycaster.ray;
+
+      if (ev.shiftKey) {
+        // Closest point on the vertical line through the vertex to the pointer ray.
+        const w0 = new THREE.Vector3().subVectors(start, ray.origin);
+        const b = ray.direction.z;
+        const denom = 1 - b * b;
+        if (Math.abs(denom) < 1e-6) return; // looking straight down the axis
+        const sc = (b * ray.direction.dot(w0) - w0.z) / denom;
+        useDesignStore
+          .getState()
+          .moveVertex(draggingVertexId, { x: start.x, y: start.y, z: start.z + sc }, { commit: false });
+        return;
+      }
+
+      if (ray.intersectPlane(horizontalPlane, hit)) {
+        useDesignStore
+          .getState()
+          .moveVertex(draggingVertexId, { x: hit.x, y: hit.y, z: start.z }, { commit: false });
+      }
+    };
+
+    const onUp = () => {
+      // Re-commit the final position so the whole drag lands as one undo step.
+      const current = useDesignStore.getState().design.vertices.find((v) => v.id === draggingVertexId);
+      if (current) useDesignStore.getState().moveVertex(draggingVertexId, current.position, { commit: true });
+      setDraggingVertexId(null);
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+  }, [draggingVertexId, camera, gl, setDraggingVertexId]);
+
+  return null;
 }
 
 /** Live preview of the face currently being drawn in Build mode: connects its picked
@@ -121,27 +233,24 @@ function VertexHandle({ id, position, locked }: { id: string; position: Vec3; lo
   const mode = useDesignStore((s) => s.mode);
   const selectedVertexId = useDesignStore((s) => s.selectedVertexId);
   const draftVertexIds = useDesignStore((s) => s.draftVertexIds);
+  const buildTool = useDesignStore((s) => s.buildTool);
+  const draggingVertexId = useDesignStore((s) => s.draggingVertexId);
   const selectVertex = useDesignStore((s) => s.selectVertex);
   const startDraftAtVertex = useDesignStore((s) => s.startDraftAtVertex);
   const addDraftVertexById = useDesignStore((s) => s.addDraftVertexById);
   const closeDraftFace = useDesignStore((s) => s.closeDraftFace);
-  const moveVertex = useDesignStore((s) => s.moveVertex);
+  const setDraggingVertexId = useDesignStore((s) => s.setDraggingVertexId);
 
-  const meshRef = useRef<THREE.Mesh>(null);
-  const [meshObj, setMeshObj] = useState<THREE.Mesh | null>(null);
+  const baseRadius = useHandleRadius();
+  const [hovered, setHovered] = useState(false);
   const isSelected = selectedVertexId === id;
   const isInDraft = draftVertexIds.includes(id);
+  const isDragging = draggingVertexId === id;
+  const movable = mode === 'build' && buildTool === 'move' && !locked;
 
   const onClick = (e: ThreeEvent<MouseEvent>) => {
     e.stopPropagation();
-    if (mode === 'build') {
-      // Shift-click selects the vertex for the numeric inspector / lock toggle / drag
-      // gizmo, without disturbing whatever face draft is (or isn't) in progress. A plain
-      // click always drives the draft chain, since that's Build mode's primary gesture.
-      if (e.shiftKey) {
-        selectVertex(id);
-        return;
-      }
+    if (mode === 'build' && buildTool === 'draw') {
       if (draftVertexIds.length === 0) {
         startDraftAtVertex(id);
       } else if (id === draftVertexIds[0] && draftVertexIds.length >= 3) {
@@ -154,41 +263,49 @@ function VertexHandle({ id, position, locked }: { id: string; position: Vec3; lo
     selectVertex(id);
   };
 
-  const color = isSelected ? '#4ade80' : locked ? '#64748b' : isInDraft ? '#f5a623' : '#7dd3fc';
+  const onPointerDown = (e: ThreeEvent<PointerEvent>) => {
+    if (!movable) return;
+    e.stopPropagation();
+    selectVertex(id);
+    setDraggingVertexId(id);
+  };
+
+  const color = isDragging
+    ? '#fbbf24'
+    : isSelected
+      ? '#4ade80'
+      : locked
+        ? '#64748b'
+        : isInDraft
+          ? '#f5a623'
+          : hovered && movable
+            ? '#fbbf24'
+            : '#7dd3fc';
+
+  // Grabbable points are drawn larger so they're easy to hit with the Move tool.
+  const radius = baseRadius * (movable ? 1.6 : 1);
 
   return (
     <group>
       <mesh
-        ref={(m) => {
-          meshRef.current = m;
-          if (m !== meshObj) setMeshObj(m);
-        }}
         position={toArray(position)}
         onClick={onClick}
+        onPointerDown={onPointerDown}
+        onPointerOver={(e) => {
+          e.stopPropagation();
+          setHovered(true);
+        }}
+        onPointerOut={() => setHovered(false)}
         userData={{ isVertexHandle: true }}
       >
-        <sphereGeometry args={[0.045, 14, 14]} />
+        <sphereGeometry args={[radius, 14, 14]} />
         <meshStandardMaterial color={color} />
       </mesh>
       {locked && (
         <mesh position={toArray(position)}>
-          <ringGeometry args={[0.06, 0.075, 16]} />
+          <ringGeometry args={[radius * 1.5, radius * 1.9, 16]} />
           <meshBasicMaterial color="#64748b" side={THREE.DoubleSide} />
         </mesh>
-      )}
-      {mode === 'build' && isSelected && !locked && meshObj && (
-        <TransformControls
-          object={meshObj}
-          mode="translate"
-          onObjectChange={() => {
-            const p = meshRef.current!.position;
-            moveVertex(id, { x: p.x, y: p.y, z: p.z }, { commit: false });
-          }}
-          onMouseUp={() => {
-            const p = meshRef.current!.position;
-            moveVertex(id, { x: p.x, y: p.y, z: p.z }, { commit: true });
-          }}
-        />
       )}
     </group>
   );
@@ -324,15 +441,18 @@ function HoleMarkers() {
 function SceneContent() {
   const design = useDesignStore((s) => s.design);
   const mode = useDesignStore((s) => s.mode);
+  const buildTool = useDesignStore((s) => s.buildTool);
+  const drawing = mode === 'build' && buildTool === 'draw';
 
   return (
     <>
       <ambientLight intensity={0.7} />
       <directionalLight position={[5, 5, 8]} intensity={0.8} />
       <GroundGrid />
+      <VertexDragHandler />
       {mode === 'sketch' && <SketchPreview />}
-      {mode === 'build' && <BuildWorkPlane />}
-      {mode === 'build' && <DraftFaceOutline />}
+      {drawing && <BuildWorkPlane />}
+      {drawing && <DraftFaceOutline />}
       {design.faces.map((f) => (
         <FaceMesh key={f.id} face={f} />
       ))}
@@ -347,13 +467,62 @@ function SceneContent() {
   );
 }
 
+/**
+ * Points the camera at the model and backs off far enough to see all of it. Runs once on
+ * mount and again whenever something asks for a re-frame (creating a preset base, or the
+ * Fit view button) — a fixed camera position can't suit both a 3in and a 30in volume.
+ */
 function CameraRig() {
-  const { camera } = useThree();
+  const { camera, controls } = useThree();
+  const frameNonce = useDesignStore((s) => s.frameNonce);
+
   useEffect(() => {
+    const { design } = useDesignStore.getState();
+    const points = design.vertices.map((v) => v.position);
+
+    const center = { x: 0, y: 0, z: 0 };
+    let radius = 6;
+    if (points.length > 0) {
+      const min = { x: Infinity, y: Infinity, z: Infinity };
+      const max = { x: -Infinity, y: -Infinity, z: -Infinity };
+      for (const p of points) {
+        min.x = Math.min(min.x, p.x);
+        min.y = Math.min(min.y, p.y);
+        min.z = Math.min(min.z, p.z);
+        max.x = Math.max(max.x, p.x);
+        max.y = Math.max(max.y, p.y);
+        max.z = Math.max(max.z, p.z);
+      }
+      center.x = (min.x + max.x) / 2;
+      center.y = (min.y + max.y) / 2;
+      center.z = (min.z + max.z) / 2;
+      radius = Math.max(
+        1,
+        Math.hypot(max.x - min.x, max.y - min.y, max.z - min.z) / 2,
+      );
+    }
+
+    const perspective = camera as THREE.PerspectiveCamera;
+    const fovRad = ((perspective.fov ?? 75) * Math.PI) / 180;
+    const distance = (radius / Math.sin(fovRad / 2)) * 1.25;
+
+    // Keep the established three-quarter viewing direction, just at the right distance.
+    const dir = new THREE.Vector3(0.45, -0.7, 0.55).normalize();
     camera.up.set(0, 0, 1);
-    camera.position.set(4, -6, 4.5);
-    camera.lookAt(0, 0, 0);
-  }, [camera]);
+    camera.position.set(
+      center.x + dir.x * distance,
+      center.y + dir.y * distance,
+      center.z + dir.z * distance,
+    );
+    camera.lookAt(center.x, center.y, center.z);
+
+    const orbit = controls as unknown as { target?: THREE.Vector3; update?: () => void } | null;
+    if (orbit?.target) {
+      orbit.target.set(center.x, center.y, center.z);
+      orbit.update?.();
+    }
+  }, [camera, controls, frameNonce]);
+
   return null;
 }
 
@@ -361,14 +530,16 @@ export function Viewport() {
   const selectVertex = useDesignStore((s) => s.selectVertex);
   const selectFace = useDesignStore((s) => s.selectFace);
   const mode = useDesignStore((s) => s.mode);
+  const buildTool = useDesignStore((s) => s.buildTool);
   const cancelDraft = useDesignStore((s) => s.cancelDraft);
+  const draggingVertexId = useDesignStore((s) => s.draggingVertexId);
 
   return (
     <div
       style={{ width: '100%', height: '100%', background: '#0f1115' }}
       onContextMenu={(e) => {
         e.preventDefault();
-        if (mode === 'build') cancelDraft();
+        if (mode === 'build' && buildTool === 'draw') cancelDraft();
       }}
     >
       <Canvas
@@ -378,7 +549,8 @@ export function Viewport() {
         }}
       >
         <CameraRig />
-        <OrbitControls makeDefault />
+        {/* Orbiting has to stand down mid-drag, or the camera moves with the vertex. */}
+        <OrbitControls makeDefault enabled={!draggingVertexId} />
         <SceneContent />
       </Canvas>
     </div>

@@ -27,9 +27,8 @@ export function applyMiterCorrection(panel: Panel, thicknessIn: number): Panel {
     const a = panel.outline[i];
     const b = panel.outline[(i + 1) % n];
     const dir = normalize({ x: b.x - a.x, y: b.y - a.y });
-    let normal: Vec2 = ccw ? { x: dir.y, y: -dir.x } : { x: -dir.y, y: dir.x };
-    const bevel = edge.bevelAngleDeg;
-    const offsetDist = bevel === null ? 0 : (thicknessIn / 2) * Math.tan(((180 - bevel) / 2) * (Math.PI / 180));
+    const normal: Vec2 = ccw ? { x: dir.y, y: -dir.x } : { x: -dir.y, y: dir.x };
+    const offsetDist = miterOffsetDistance(edge.bevelAngleDeg, thicknessIn);
     const offsetA = { x: a.x + normal.x * offsetDist, y: a.y + normal.y * offsetDist };
     return { point: offsetA, dir };
   });
@@ -38,11 +37,30 @@ export function applyMiterCorrection(panel: Panel, thicknessIn: number): Panel {
   for (let i = 0; i < n; i++) {
     const prev = offsetLines[(i - 1 + n) % n];
     const cur = offsetLines[i];
-    const corner = lineIntersection(prev.point, prev.dir, cur.point, cur.dir) ?? panel.outline[i];
-    newOutline.push(corner);
+    const corner = lineIntersection(prev.point, prev.dir, cur.point, cur.dir);
+    // Near-parallel adjacent edges (or any degenerate solve) fall back to the
+    // uncorrected corner rather than emitting a wild coordinate.
+    const usable = corner && Number.isFinite(corner.x) && Number.isFinite(corner.y);
+    newOutline.push(usable ? corner : panel.outline[i]);
   }
 
   return { ...panel, outline: newOutline };
+}
+
+/**
+ * How far a beveled edge's cut line sits outward of the unbeveled edge, on the panel's
+ * outer face. tan() runs away toward infinity as the fold angle approaches 0 (a panel
+ * folded back flat onto its neighbor), which would otherwise throw the corner solve out
+ * to absurd coordinates, so the offset is capped at a few panel thicknesses — past that
+ * the joint is degenerate and the correction is meaningless anyway.
+ */
+function miterOffsetDistance(bevelAngleDeg: number | null, thicknessIn: number): number {
+  if (bevelAngleDeg === null || !Number.isFinite(bevelAngleDeg)) return 0;
+  const clampedBevel = Math.min(180, Math.max(0, bevelAngleDeg));
+  const raw = (thicknessIn / 2) * Math.tan(((180 - clampedBevel) / 2) * (Math.PI / 180));
+  const cap = thicknessIn * 4;
+  if (!Number.isFinite(raw)) return cap;
+  return Math.min(Math.abs(raw), cap) * Math.sign(raw || 1);
 }
 
 function shoelaceSignedArea(points: Vec2[]): number {

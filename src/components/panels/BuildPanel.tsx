@@ -1,7 +1,19 @@
 import { useState } from 'react';
-import { useDesignStore } from '../../store/designStore';
+import { useDesignStore, type BuildTool } from '../../store/designStore';
 import { VertexInspector } from './VertexInspector';
 import { NumberField } from '../ui/NumberField';
+
+const TOOL_LABELS: Record<BuildTool, string> = {
+  select: '⬚ Select',
+  move: '✥ Move',
+  draw: '✎ Draw',
+};
+
+const TOOL_HINTS: Record<BuildTool, string> = {
+  select: 'Click a vertex or face to select it for the numeric inspector, locking, or the pull-up shortcut.',
+  move: 'Click and drag any vertex to move it. Dragging slides it horizontally; hold Shift while dragging to move it straight up and down. Locked vertices stay put.',
+  draw: 'Click an existing vertex to start a face, then keep clicking to add edges — click another vertex to snap to it, or click empty space to drop a new point on the work plane. Click the first vertex again (3+ points) to close the face. Right-click cancels.',
+};
 
 export function BuildPanel() {
   const design = useDesignStore((s) => s.design);
@@ -17,8 +29,13 @@ export function BuildPanel() {
   const workPlaneZ = useDesignStore((s) => s.workPlaneZ);
   const setWorkPlaneZ = useDesignStore((s) => s.setWorkPlaneZ);
   const setVerticesLocked = useDesignStore((s) => s.setVerticesLocked);
+  const buildTool = useDesignStore((s) => s.buildTool);
+  const setBuildTool = useDesignStore((s) => s.setBuildTool);
+  const addDraftNewVertex = useDesignStore((s) => s.addDraftNewVertex);
 
   const [pullHeight, setPullHeight] = useState(3);
+  const [exactX, setExactX] = useState(0);
+  const [exactY, setExactY] = useState(0);
   const selectedFace = design.faces.find((f) => f.id === selectedFaceId);
   const baseFace = design.faces.find((f) => f.id === design.baseFaceId);
   const baseVertices = baseFace ? design.vertices.filter((v) => baseFace.vertexIds.includes(v.id)) : [];
@@ -26,37 +43,58 @@ export function BuildPanel() {
 
   return (
     <div>
-      <p className="panel-hint">
-        Click an existing vertex to start a new face, then keep clicking to add edges: click another existing
-        vertex to snap to it, or click empty space above the base to drop a new point on the work plane below.
-        Click the first vertex again (with 3+ picked) to close the face. Right-click cancels.
-        <br />
-        <strong>Shift-click</strong> a vertex to select it instead (for the numeric inspector, drag gizmo, or
-        lock toggle) without affecting any face you're drawing.
-      </p>
-
-      <div className="status-row">
-        {draftVertexIds.length === 0 && 'No face in progress — click an existing vertex to start one.'}
-        {draftVertexIds.length > 0 && `Drawing face: ${draftVertexIds.length} vertex/vertices picked.`}
+      <div className="tool-row">
+        {(['select', 'move', 'draw'] as const).map((tool) => (
+          <button
+            key={tool}
+            className={buildTool === tool ? 'tool-active' : ''}
+            onClick={() => setBuildTool(tool)}
+          >
+            {TOOL_LABELS[tool]}
+          </button>
+        ))}
       </div>
-      {draftVertexIds.length > 0 && (
+      <p className="panel-hint">{TOOL_HINTS[buildTool]}</p>
+
+      {buildTool === 'draw' && (
         <>
-          <NumberField
-            label="Work plane height (Z)"
-            value={workPlaneZ}
-            suffix="in"
-            onCommit={setWorkPlaneZ}
-          />
-          <p className="panel-hint">
-            New points from clicking empty space land on this horizontal plane (shown as a faint blue grid).
-            Adjust it between clicks to place points at different heights.
-          </p>
-          <div className="button-row">
-            <button onClick={cancelDraft}>Cancel</button>
-            <button disabled={draftVertexIds.length < 3} className="primary" onClick={() => closeDraftFace()}>
-              Close Face
-            </button>
+          <div className="status-row">
+            {draftVertexIds.length === 0 && 'No face in progress — click an existing vertex to start one.'}
+            {draftVertexIds.length > 0 && `Drawing face: ${draftVertexIds.length} point(s) picked.`}
           </div>
+          {draftVertexIds.length > 0 && (
+            <>
+              <NumberField
+                label="Work plane height (Z)"
+                value={workPlaneZ}
+                suffix="in"
+                onCommit={setWorkPlaneZ}
+              />
+              <p className="panel-hint">
+                Clicks on empty space land on this horizontal plane (the blue grid). A yellow ghost marker
+                shows exactly where the point will go before you click. Adjust the height between clicks to
+                place points at different levels.
+              </p>
+
+              <div className="inspector-group">
+                <div className="inspector-group-title">Add point by exact coordinates</div>
+                <NumberField label="X" value={exactX} suffix="in" onCommit={setExactX} />
+                <NumberField label="Y" value={exactY} suffix="in" onCommit={setExactY} />
+                <div className="button-row">
+                  <button onClick={() => addDraftNewVertex({ x: exactX, y: exactY, z: workPlaneZ })}>
+                    Add point at X/Y, Z={workPlaneZ}
+                  </button>
+                </div>
+              </div>
+
+              <div className="button-row">
+                <button onClick={cancelDraft}>Cancel</button>
+                <button disabled={draftVertexIds.length < 3} className="primary" onClick={() => closeDraftFace()}>
+                  Close Face
+                </button>
+              </div>
+            </>
+          )}
         </>
       )}
 
@@ -80,7 +118,7 @@ export function BuildPanel() {
 
           <div className="inspector-group-title">Vertex locking</div>
           <p className="panel-hint">
-            A locked vertex can still be clicked to start/close a face, but its drag gizmo won't appear.
+            A locked vertex can still be clicked to start/close a face, but the Move tool won't budge it.
           </p>
           <div className="button-row">
             <button onClick={() => setVerticesLocked(baseVertices.map((v) => v.id), !baseFullyLocked)}>

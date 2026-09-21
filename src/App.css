@@ -101,6 +101,23 @@
   align-items: center;
 }
 
+.tool-row {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.tool-row button {
+  flex: 1;
+  padding: 8px 6px;
+  font-weight: 600;
+}
+
+.tool-row button.tool-active {
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
 .preset-row {
   display: flex;
   gap: 4px;
