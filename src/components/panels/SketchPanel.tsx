@@ -3,6 +3,8 @@ import { useDesignStore } from '../../store/designStore';
 import { VertexInspector } from './VertexInspector';
 import { NumberField } from '../ui/NumberField';
 import { POLYGON_PRESETS } from '../../geometry/polygons';
+import { BASE_PLANE_MAX_IN, BASE_PLANE_MIN_IN } from '../../geometry/types';
+import { saveDefaultBasePlaneSize } from '../../persistence/storage';
 
 export function SketchPanel() {
   const openSketch = useDesignStore((s) => s.openSketch);
@@ -10,6 +12,7 @@ export function SketchPanel() {
   const clearSketch = useDesignStore((s) => s.clearSketch);
   const closeSketch = useDesignStore((s) => s.closeSketch);
   const createBasePolygon = useDesignStore((s) => s.createBasePolygon);
+  const setBasePlaneSize = useDesignStore((s) => s.setBasePlaneSize);
   const design = useDesignStore((s) => s.design);
   const selectedVertexId = useDesignStore((s) => s.selectedVertexId);
 
@@ -24,8 +27,37 @@ export function SketchPanel() {
   return (
     <div>
       <div className="inspector-group">
+        <div className="inspector-group-title">Work area</div>
+        <NumberField
+          label="Base plane"
+          value={design.basePlaneSizeIn}
+          suffix="in"
+          min={BASE_PLANE_MIN_IN}
+          max={BASE_PLANE_MAX_IN}
+          onCommit={setBasePlaneSize}
+        />
+        <div className="button-row">
+          <button onClick={() => saveDefaultBasePlaneSize(design.basePlaneSizeIn)}>
+            Save as default
+          </button>
+        </div>
+        <p className="panel-hint">
+          The square grid your volume is built on, {BASE_PLANE_MIN_IN}–{BASE_PLANE_MAX_IN}in a side. Sketch
+          points stay inside it, so a click near the horizon can't strand a point off in the distance. "Save
+          as default" makes this the starting size for new designs.
+        </p>
+      </div>
+
+      <div className="inspector-group">
         <div className="inspector-group-title">Start from a preset shape</div>
-        <NumberField label="Width across" value={presetWidth} suffix="in" onCommit={setPresetWidth} />
+        <NumberField
+          label="Width across"
+          value={presetWidth}
+          suffix="in"
+          min={1}
+          max={design.basePlaneSizeIn}
+          onCommit={setPresetWidth}
+        />
         <div className="preset-row">
           {POLYGON_PRESETS.map((preset) => (
             <button key={preset.id} onClick={() => startPreset(preset.sides)}>

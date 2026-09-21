@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { AngleLock, Design, Face, Hole, Vec3 } from '../geometry/types';
-import { createEmptyDesign } from '../geometry/types';
+import { BASE_PLANE_DEFAULT_IN, clampBasePlaneSize, createEmptyDesign } from '../geometry/types';
 import { deriveEdges, findSharedEdge, getFace, isFacePlanar } from '../geometry/mesh';
 import { setEdgeLengthByMovingVertex, setInteriorAngleAtVertex, extrudeFace } from '../geometry/edit';
 import { solveDihedralAngle } from '../geometry/solver';
@@ -8,6 +8,7 @@ import { reapplyAngleLocks } from '../geometry/relax';
 import { regularPolygonPoints } from '../geometry/polygons';
 import { planeThroughPoints, resolveNextPoint, type DrawPlane } from '../geometry/drawPlane';
 import { keepFacesPlanar } from '../geometry/planarize';
+import { loadDefaultBasePlaneSize } from '../persistence/storage';
 
 export type Mode = 'sketch' | 'build' | 'angles' | 'holes' | 'unfold';
 
@@ -110,6 +111,7 @@ interface DesignStoreState {
   removeHole: (id: string) => void;
 
   setPanelThickness: (inches: number) => void;
+  setBasePlaneSize: (inches: number) => void;
   setBaseFaceId: (id: string | null) => void;
   renameFace: (id: string, label: string) => void;
 
@@ -144,6 +146,18 @@ function pendingPointOf(s: DesignStoreState): Vec3 | null {
     lengthIn: s.lockedLengthIn,
     angleDeg: s.lockedAngleDeg,
   });
+}
+
+/**
+ * Drops vertices no face refers to. Points are added to the design as they're placed, so
+ * abandoning a half-drawn face would otherwise strand every one of them in the model —
+ * invisible clutter that also skews anything measuring the model's size.
+ */
+function pruneOrphanVertices(design: Design): Design {
+  const used = new Set<string>();
+  for (const face of design.faces) for (const id of face.vertexIds) used.add(id);
+  if (design.vertices.every((v) => used.has(v.id))) return design;
+  return { ...design, vertices: design.vertices.filter((v) => used.has(v.id)) };
 }
 
 /** Resets everything about a face-in-progress. */
@@ -220,7 +234,7 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
       const vertexIds = points.map(() => makeId('v'));
       const face: Face = { id: makeId('f'), vertexIds, label: 'Base' };
       const nextDesign: Design = {
-        ...createEmptyDesign(),
+        ...createEmptyDesign(s.design.basePlaneSizeIn),
         panelThicknessIn: s.design.panelThicknessIn,
         vertices: points.map((position, i) => ({ id: vertexIds[i], position })),
         faces: [face],
@@ -280,7 +294,12 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
 
   // Switching tools abandons any half-drawn face, so the draft can't be left dangling
   // in a tool that has no way to finish it.
-  setBuildTool: (tool) => set((s) => (tool === s.buildTool ? {} : { buildTool: tool, ...CLEARED_DRAW_STATE })),
+  setBuildTool: (tool) =>
+    set((s) =>
+      tool === s.buildTool
+        ? {}
+        : { buildTool: tool, ...CLEARED_DRAW_STATE, design: pruneOrphanVertices(s.design) },
+    ),
 
   setDraggingVertexId: (id) => set({ draggingVertexId: id }),
 
@@ -319,7 +338,7 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
       return { ...commit(s, nextDesign), ...CLEARED_DRAW_STATE, selectedFaceId: face.id };
     }),
 
-  cancelDraft: () => set({ ...CLEARED_DRAW_STATE }),
+  cancelDraft: () => set((s) => ({ ...CLEARED_DRAW_STATE, design: pruneOrphanVertices(s.design) })),
 
   pullUpFace: (faceId, heightIn) =>
     set((s) => {
@@ -408,6 +427,9 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
 
   setPanelThickness: (inches) => set((s) => commit(s, { ...s.design, panelThicknessIn: inches })),
 
+  setBasePlaneSize: (inches) =>
+    set((s) => commit(s, { ...s.design, basePlaneSizeIn: clampBasePlaneSize(inches) })),
+
   setBaseFaceId: (id) => set((s) => commit(s, { ...s.design, baseFaceId: id })),
 
   renameFace: (id, label) =>
@@ -450,8 +472,28 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
       };
     }),
 
-  loadDesign: (design) => set({ design, past: [], future: [], selectedFaceId: null, selectedVertexId: null }),
-  resetDesign: () => set({ design: createEmptyDesign(), past: [], future: [], openSketch: [], draftVertexIds: [] }),
+  // Designs saved before a field existed still have to open, so fill in any gaps.
+  loadDesign: (design) =>
+    set({
+      design: {
+        ...design,
+        basePlaneSizeIn: clampBasePlaneSize(design.basePlaneSizeIn ?? BASE_PLANE_DEFAULT_IN),
+      },
+      past: [],
+      future: [],
+      ...CLEARED_DRAW_STATE,
+      selectedFaceId: null,
+      selectedVertexId: null,
+    }),
+  // A new design starts at the user's saved work-area default, not the built-in one.
+  resetDesign: () =>
+    set({
+      design: createEmptyDesign(loadDefaultBasePlaneSize() ?? undefined),
+      past: [],
+      future: [],
+      ...CLEARED_DRAW_STATE,
+      openSketch: [],
+    }),
 }));
 
 export function allEdgesOf(design: Design) {

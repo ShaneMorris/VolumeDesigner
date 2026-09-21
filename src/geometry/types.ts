@@ -44,9 +44,21 @@ export interface Design {
   /** Global panel material thickness, inches — used only for corner miter correction. */
   panelThicknessIn: number;
   baseFaceId: string | null;
+  /** Side length of the square base plane (the work area), in inches. */
+  basePlaneSizeIn: number;
 }
 
-export function createEmptyDesign(): Design {
+/** Bounds for the square base plane the model is built on. */
+export const BASE_PLANE_MIN_IN = 6;
+export const BASE_PLANE_MAX_IN = 96;
+export const BASE_PLANE_DEFAULT_IN = 24;
+
+export function clampBasePlaneSize(inches: number): number {
+  if (!Number.isFinite(inches)) return BASE_PLANE_DEFAULT_IN;
+  return Math.min(BASE_PLANE_MAX_IN, Math.max(BASE_PLANE_MIN_IN, inches));
+}
+
+export function createEmptyDesign(basePlaneSizeIn = BASE_PLANE_DEFAULT_IN): Design {
   return {
     vertices: [],
     faces: [],
@@ -54,6 +66,7 @@ export function createEmptyDesign(): Design {
     holes: [],
     panelThicknessIn: 0.75,
     baseFaceId: null,
+    basePlaneSizeIn: clampBasePlaneSize(basePlaneSizeIn),
   };
 }
 

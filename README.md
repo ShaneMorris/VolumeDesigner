@@ -22,10 +22,16 @@ explicitly.
 
 The toolbar's five modes match the spec's workflow:
 
-1. **Sketch Base** — start from a preset regular polygon (triangle, square, pentagon,
-   hexagon, octagon) at a given width, or click the ground grid to place vertices by
-   hand (3+) and hit "Close Shape". Either way, select a vertex afterward to edit its
-   adjacent edge lengths and interior angle numerically.
+1. **Sketch Base** — set the **work area** first: a square base plane, 24in by default
+   and capped at 96in a side, which everything is built on. "Save as default" keeps
+   that size for future designs. Then start from a preset regular polygon (triangle,
+   square, pentagon, hexagon, octagon) at a given width, or click the grid to place
+   vertices by hand (3+) and hit "Close Shape". Either way, select a vertex afterward
+   to edit its adjacent edge lengths and interior angle numerically.
+
+   Sketch clicks are clamped inside the work area: a click near the horizon meets the
+   ground plane an enormous distance away, and a point stranded out there is both
+   invisible and disruptive (it used to inflate every on-screen handle).
 2. **Build Faces** — three CAD-style tools:
    - **Select** — pick a vertex or face for the numeric inspector, locking, or pull-up.
    - **Move** — click and drag a vertex to reshape every face touching it, live.
@@ -88,7 +94,8 @@ the current solid.
   readers expect plain decimal reals and reject exponent notation, so those files
   failed to import. This writer formats every real as fixed decimal, snaps near-zeros,
   and refuses non-finite or implausible coordinates outright.
-- `src/persistence/` — localStorage autosave and JSON file save/load.
+- `src/persistence/` — localStorage autosave, JSON file save/load, and the saved
+  work-area default that new designs start from.
 
 ## Scope notes / judgment calls
 

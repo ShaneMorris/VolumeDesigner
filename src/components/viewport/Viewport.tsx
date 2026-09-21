@@ -11,13 +11,15 @@ import { fanTriangulatePositions, toArray } from './threeHelpers';
 
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 
+/** Hard ceiling on handle size, so a big work area can't produce absurd spheres. */
+const MAX_HANDLE_RADIUS_IN = 0.5;
+
+/** The square work area the model is built on, at its user-set size. */
 function GroundGrid() {
-  return (
-    <gridHelper
-      args={[40, 40, '#5b6470', '#2a2f38']}
-      rotation={[Math.PI / 2, 0, 0]}
-    />
-  );
+  const size = useDesignStore((s) => s.design.basePlaneSizeIn);
+  // One grid line per inch stays readable at 24in but turns to mush at 96in.
+  const divisions = size <= 36 ? Math.round(size) : Math.round(size / 2);
+  return <gridHelper args={[size, divisions, '#5b6470', '#2a2f38']} rotation={[Math.PI / 2, 0, 0]} />;
 }
 
 function SketchPreview() {
@@ -25,6 +27,7 @@ function SketchPreview() {
   const openSketch = useDesignStore((s) => s.openSketch);
   const addSketchPoint = useDesignStore((s) => s.addSketchPoint);
   const mode = useDesignStore((s) => s.mode);
+  const basePlaneSizeIn = useDesignStore((s) => s.design.basePlaneSizeIn);
 
   const plane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), []);
 
@@ -34,8 +37,11 @@ function SketchPreview() {
     const point = new THREE.Vector3();
     e.ray.intersectPlane(plane, point);
     if (!point) return;
-    const snapped = { x: Math.round(point.x * 8) / 8, y: Math.round(point.y * 8) / 8, z: 0 };
-    addSketchPoint(snapped);
+    // A click near the horizon meets the ground plane a very long way off, so keep
+    // sketch points inside the work area rather than stranding one in the distance.
+    const half = basePlaneSizeIn / 2;
+    const clamp = (value: number) => Math.min(half, Math.max(-half, Math.round(value * 8) / 8));
+    addSketchPoint({ x: clamp(point.x), y: clamp(point.y), z: 0 });
   };
 
   const points = openSketch.map((p) => new THREE.Vector3(p.x, p.y, p.z));
@@ -58,36 +64,29 @@ function SketchPreview() {
 }
 
 /**
- * Handle radius scaled to the model, so grab targets stay a consistent apparent size
- * whether the volume is 3in or 30in across — a fixed radius is an unclickable speck on
- * a large base and a blob on a small one.
+ * Handle radius scaled to the work area, so grab targets stay a consistent apparent size
+ * whether the volume is 6in or 96in across — a fixed radius is an unclickable speck on a
+ * large base and a blob on a small one.
+ *
+ * Deliberately keyed to the base plane rather than to the geometry: measuring the model
+ * let a single stray point far out in space inflate every handle, and because the size
+ * only ever grew with the outlier, the spheres never shrank back. The work area is a
+ * stable reference that misplaced geometry can't move.
  */
 function useHandleRadius(): number {
-  const design = useDesignStore((s) => s.design);
-  return useMemo(() => {
-    let extent = 0;
-    for (const v of design.vertices) {
-      extent = Math.max(extent, Math.abs(v.position.x), Math.abs(v.position.y), Math.abs(v.position.z));
-    }
-    return Math.min(0.5, Math.max(0.05, extent * 0.02));
-  }, [design.vertices]);
+  const basePlaneSizeIn = useDesignStore((s) => s.design.basePlaneSizeIn);
+  return Math.min(MAX_HANDLE_RADIUS_IN, Math.max(0.06, basePlaneSizeIn * 0.005));
 }
 
 /**
- * Size of the drawing surface: big enough to cover the model with room to grow, but
- * deliberately *finite*. An infinite plane meant a click aimed near the horizon hit it
- * at an enormous distance, dropping points far out in space — the surface has to end
- * somewhere the user can see.
+ * Size of the drawing surface, tied to the work area and deliberately *finite*. An
+ * unbounded plane meant a click aimed near the horizon struck it at an enormous
+ * distance and dropped a point far out in space; the surface has to end somewhere the
+ * user can actually see. Slightly taller than the plane so walls have headroom.
  */
 function useDrawSurfaceSize(): number {
-  const design = useDesignStore((s) => s.design);
-  return useMemo(() => {
-    let extent = 12;
-    for (const v of design.vertices) {
-      extent = Math.max(extent, Math.abs(v.position.x), Math.abs(v.position.y));
-    }
-    return Math.ceil((extent + 12) * 2);
-  }, [design.vertices]);
+  const basePlaneSizeIn = useDesignStore((s) => s.design.basePlaneSizeIn);
+  return basePlaneSizeIn * 1.5;
 }
 
 /** Orientation quaternion that lays a default (XY) plane onto an arbitrary normal. */

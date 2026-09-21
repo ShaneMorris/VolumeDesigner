@@ -1,6 +1,30 @@
 import type { Design } from '../geometry/types';
 
 const STORAGE_KEY = 'volume-designer:design';
+const DEFAULT_PLANE_KEY = 'volume-designer:default-base-plane-in';
+
+/**
+ * The work-area size new designs start with. Kept outside the design itself so it
+ * carries across designs as a personal preference, the way a shop default would.
+ */
+export function loadDefaultBasePlaneSize(): number | null {
+  try {
+    const raw = localStorage.getItem(DEFAULT_PLANE_KEY);
+    if (!raw) return null;
+    const parsed = Number.parseFloat(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveDefaultBasePlaneSize(inches: number) {
+  try {
+    localStorage.setItem(DEFAULT_PLANE_KEY, String(inches));
+  } catch {
+    // Storage can be unavailable (private browsing, quota) — the preference is optional.
+  }
+}
 
 export function saveToLocalStorage(design: Design) {
   try {
