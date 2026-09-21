@@ -13,7 +13,7 @@ const TOOL_LABELS: Record<BuildTool, string> = {
 const TOOL_HINTS: Record<BuildTool, string> = {
   select: 'Click a vertex or face to select it for the numeric inspector, locking, or the pull-up shortcut.',
   move: 'Click and drag any vertex to move it. Dragging slides it horizontally; hold Shift while dragging to move it straight up and down. Locked vertices stay put.',
-  draw: 'Click an existing point to start a face. A line then follows the cursor — click to place each next point, typing an exact length/angle first if you want. Click the first point again (3+ points) to close the face. Esc cancels.',
+  draw: 'Click an existing point to start a face. A line then follows the cursor — click to place each next point, typing an exact length/angle first if you want. Connecting the line back to any existing point closes the face (Shift-click to route through it and keep drawing instead). Esc cancels.',
 };
 
 export function BuildPanel() {

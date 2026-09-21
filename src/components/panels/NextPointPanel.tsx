@@ -45,7 +45,7 @@ export function NextPointPanel() {
       <div className="inspector-group-title">Next point</div>
       <p className="panel-hint">
         Move the cursor to aim the segment, or type a length/angle to pin it down. Click in the viewport (or
-        "Place point") to set it. Click the first point to close the face; Esc cancels.
+        "Place point") to set it. Connecting the line to any existing point closes the face; Esc cancels.
       </p>
 
       <NumberField

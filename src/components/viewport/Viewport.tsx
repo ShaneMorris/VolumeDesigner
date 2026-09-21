@@ -118,11 +118,22 @@ function DrawSurface() {
 
   if (draftVertexIds.length === 0 || !drawPlane) return null;
 
-  // A click that also hit a vertex or face handle anywhere along the ray belongs to that
-  // handle, not to the surface: don't place a stray point, and don't stop propagation, so
-  // the handle's own onClick still fires even though it may be farther from the camera.
-  const hitsHandle = (e: ThreeEvent<MouseEvent>) =>
-    e.intersections.some((i) => i.object.userData?.isVertexHandle || i.object.userData?.isFaceHandle);
+  // The draw surface is a construction aid, so real geometry under the pointer wins
+  // over it: skip placing a point and leave propagation alone, letting the handle's own
+  // onClick run. Vertices and faces need different rules, because they differ in size.
+  //
+  // A vertex handle is a small sphere — the ray can only hit it if the user was pointing
+  // at it — so it wins wherever it lies along the ray, including behind the surface
+  // (which is exactly where an existing corner sits when you reach back to close a face).
+  // A face is broad, and the ray routinely carries on past the point being aimed at and
+  // strikes one well behind it, so a face only wins when it's in front, visibly
+  // occluding the surface.
+  const clickBelongsToGeometry = (e: ThreeEvent<MouseEvent>) =>
+    e.intersections.some(
+      (i) =>
+        i.object.userData?.isVertexHandle ||
+        (i.object.userData?.isFaceHandle && i.distance < e.distance),
+    );
 
   return (
     <mesh
@@ -130,7 +141,7 @@ function DrawSurface() {
       quaternion={orientation}
       onPointerMove={(e) => setDrawCursor({ x: e.point.x, y: e.point.y, z: e.point.z })}
       onClick={(e) => {
-        if (hitsHandle(e)) return;
+        if (clickBelongsToGeometry(e)) return;
         e.stopPropagation();
         setDrawCursor({ x: e.point.x, y: e.point.y, z: e.point.z });
         commitPendingPoint();
@@ -305,10 +316,13 @@ function VertexHandle({ id, position, locked }: { id: string; position: Vec3; lo
             z: camera.position.z,
           }),
         );
-      } else if (id === draftVertexIds[0] && draftVertexIds.length >= 3) {
-        closeDraftFace();
-      } else if (!isInDraft) {
-        addDraftVertexById(id);
+      } else {
+        // Connecting the line to an existing point finishes the face. Shift-click
+        // instead routes through the point and keeps drawing, for a face that runs
+        // along several existing corners before it closes.
+        const lengthAfter = isInDraft ? draftVertexIds.length : draftVertexIds.length + 1;
+        if (!isInDraft) addDraftVertexById(id);
+        if (lengthAfter >= 3 && !e.shiftKey) closeDraftFace();
       }
       return;
     }
