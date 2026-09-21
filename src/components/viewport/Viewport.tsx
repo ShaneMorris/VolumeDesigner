@@ -6,6 +6,7 @@ import { useDesignStore } from '../../store/designStore';
 import type { Face, Vec3 } from '../../geometry/types';
 import { facePositions, findSharedEdge } from '../../geometry/mesh';
 import { faceLocalBasis, fromFaceLocal, toFaceLocal } from '../../geometry/basis';
+import { resolveNextPoint, verticalPlaneFacingCamera } from '../../geometry/drawPlane';
 import { fanTriangulatePositions, toArray } from './threeHelpers';
 
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
@@ -56,11 +57,6 @@ function SketchPreview() {
   );
 }
 
-/** Snap a work-plane coordinate to the 1/8in grid. */
-function snapToGrid(value: number): number {
-  return Math.round(value * 8) / 8;
-}
-
 /**
  * Handle radius scaled to the model, so grab targets stay a consistent apparent size
  * whether the volume is 3in or 30in across — a fixed radius is an unclickable speck on
@@ -78,12 +74,12 @@ function useHandleRadius(): number {
 }
 
 /**
- * Size of the drawing work plane: big enough to cover the model with room to grow, but
+ * Size of the drawing surface: big enough to cover the model with room to grow, but
  * deliberately *finite*. An infinite plane meant a click aimed near the horizon hit it
- * at an enormous distance, dropping points far out in space — the plane has to end
+ * at an enormous distance, dropping points far out in space — the surface has to end
  * somewhere the user can see.
  */
-function useWorkPlaneSize(): number {
+function useDrawSurfaceSize(): number {
   const design = useDesignStore((s) => s.design);
   return useMemo(() => {
     let extent = 12;
@@ -94,50 +90,96 @@ function useWorkPlaneSize(): number {
   }, [design.vertices]);
 }
 
-/**
- * Build mode's "draw into empty space" surface: a bounded horizontal plane at
- * `workPlaneZ` that clicks are projected onto to create new draft vertices, with a grid
- * and a live ghost marker showing exactly where the next point will land.
- */
-function BuildWorkPlane() {
-  const draftVertexIds = useDesignStore((s) => s.draftVertexIds);
-  const workPlaneZ = useDesignStore((s) => s.workPlaneZ);
-  const addDraftNewVertex = useDesignStore((s) => s.addDraftNewVertex);
-  const size = useWorkPlaneSize();
-  const handleRadius = useHandleRadius();
-  const [preview, setPreview] = useState<{ x: number; y: number } | null>(null);
+/** Orientation quaternion that lays a default (XY) plane onto an arbitrary normal. */
+function quaternionForNormal(normal: Vec3): THREE.Quaternion {
+  return new THREE.Quaternion().setFromUnitVectors(
+    new THREE.Vector3(0, 0, 1),
+    new THREE.Vector3(normal.x, normal.y, normal.z).normalize(),
+  );
+}
 
-  if (draftVertexIds.length === 0) return null;
+/**
+ * The surface the face in progress is drawn on. It's a bounded quad oriented to the
+ * current draw plane — vertical and facing the camera for the first couple of points,
+ * then the face's own plane once three points have fixed it. Pointer moves over it feed
+ * the rubber-band segment; clicks commit the pending point.
+ */
+function DrawSurface() {
+  const draftVertexIds = useDesignStore((s) => s.draftVertexIds);
+  const drawPlane = useDesignStore((s) => s.drawPlane);
+  const setDrawCursor = useDesignStore((s) => s.setDrawCursor);
+  const commitPendingPoint = useDesignStore((s) => s.commitPendingPoint);
+  const size = useDrawSurfaceSize();
+
+  const orientation = useMemo(
+    () => (drawPlane ? quaternionForNormal(drawPlane.normal) : new THREE.Quaternion()),
+    [drawPlane],
+  );
+
+  if (draftVertexIds.length === 0 || !drawPlane) return null;
 
   // A click that also hit a vertex or face handle anywhere along the ray belongs to that
-  // handle, not to the plane: don't drop a stray point, and don't stop propagation, so
+  // handle, not to the surface: don't place a stray point, and don't stop propagation, so
   // the handle's own onClick still fires even though it may be farther from the camera.
-  const clickBelongsToHandle = (e: ThreeEvent<MouseEvent>) =>
+  const hitsHandle = (e: ThreeEvent<MouseEvent>) =>
     e.intersections.some((i) => i.object.userData?.isVertexHandle || i.object.userData?.isFaceHandle);
 
-  const onPlaneClick = (e: ThreeEvent<MouseEvent>) => {
-    if (clickBelongsToHandle(e)) return;
-    e.stopPropagation();
-    addDraftNewVertex({ x: snapToGrid(e.point.x), y: snapToGrid(e.point.y), z: workPlaneZ });
-  };
+  return (
+    <mesh
+      position={[drawPlane.origin.x, drawPlane.origin.y, drawPlane.origin.z]}
+      quaternion={orientation}
+      onPointerMove={(e) => setDrawCursor({ x: e.point.x, y: e.point.y, z: e.point.z })}
+      onClick={(e) => {
+        if (hitsHandle(e)) return;
+        e.stopPropagation();
+        setDrawCursor({ x: e.point.x, y: e.point.y, z: e.point.z });
+        commitPendingPoint();
+      }}
+    >
+      <planeGeometry args={[size, size]} />
+      <meshBasicMaterial color="#7dd3fc" transparent opacity={0.06} side={THREE.DoubleSide} />
+    </mesh>
+  );
+}
+
+/**
+ * The live segment from the last placed point to wherever the next one would land —
+ * the "line that moves with the cursor" — plus a marker at that landing point.
+ */
+function RubberBandSegment() {
+  const design = useDesignStore((s) => s.design);
+  const draftVertexIds = useDesignStore((s) => s.draftVertexIds);
+  const drawPlane = useDesignStore((s) => s.drawPlane);
+  const drawCursor = useDesignStore((s) => s.drawCursor);
+  const lockedLengthIn = useDesignStore((s) => s.lockedLengthIn);
+  const lockedAngleDeg = useDesignStore((s) => s.lockedAngleDeg);
+  const handleRadius = useHandleRadius();
+
+  if (!drawPlane || draftVertexIds.length === 0) return null;
+
+  const lastId = draftVertexIds[draftVertexIds.length - 1];
+  const from = design.vertices.find((v) => v.id === lastId)?.position;
+  if (!from) return null;
+
+  const fullyTyped = lockedLengthIn !== null && lockedAngleDeg !== null;
+  if (!drawCursor && !fullyTyped) return null;
+
+  const to = resolveNextPoint(drawPlane, from, drawCursor ?? from, {
+    lengthIn: lockedLengthIn,
+    angleDeg: lockedAngleDeg,
+  });
 
   return (
-    <group position={[0, 0, workPlaneZ]}>
-      <mesh
-        onClick={onPlaneClick}
-        onPointerMove={(e) => setPreview({ x: snapToGrid(e.point.x), y: snapToGrid(e.point.y) })}
-        onPointerOut={() => setPreview(null)}
-      >
-        <planeGeometry args={[size, size]} />
-        <meshBasicMaterial color="#7dd3fc" transparent opacity={0.07} side={THREE.DoubleSide} />
+    <group>
+      <Line
+        points={[new THREE.Vector3(from.x, from.y, from.z), new THREE.Vector3(to.x, to.y, to.z)]}
+        color="#fbbf24"
+        lineWidth={2}
+      />
+      <mesh position={[to.x, to.y, to.z]}>
+        <sphereGeometry args={[handleRadius, 12, 12]} />
+        <meshBasicMaterial color="#fbbf24" transparent opacity={0.9} />
       </mesh>
-      <gridHelper args={[size, size, '#7dd3fc', '#334155']} rotation={[Math.PI / 2, 0, 0]} />
-      {preview && (
-        <mesh position={[preview.x, preview.y, 0]}>
-          <sphereGeometry args={[handleRadius, 12, 12]} />
-          <meshBasicMaterial color="#fbbf24" transparent opacity={0.85} />
-        </mesh>
-      )}
     </group>
   );
 }
@@ -236,12 +278,13 @@ function VertexHandle({ id, position, locked }: { id: string; position: Vec3; lo
   const buildTool = useDesignStore((s) => s.buildTool);
   const draggingVertexId = useDesignStore((s) => s.draggingVertexId);
   const selectVertex = useDesignStore((s) => s.selectVertex);
-  const startDraftAtVertex = useDesignStore((s) => s.startDraftAtVertex);
+  const startDrawingAt = useDesignStore((s) => s.startDrawingAt);
   const addDraftVertexById = useDesignStore((s) => s.addDraftVertexById);
   const closeDraftFace = useDesignStore((s) => s.closeDraftFace);
   const setDraggingVertexId = useDesignStore((s) => s.setDraggingVertexId);
 
   const baseRadius = useHandleRadius();
+  const { camera } = useThree();
   const [hovered, setHovered] = useState(false);
   const isSelected = selectedVertexId === id;
   const isInDraft = draftVertexIds.includes(id);
@@ -252,7 +295,16 @@ function VertexHandle({ id, position, locked }: { id: string; position: Vec3; lo
     e.stopPropagation();
     if (mode === 'build' && buildTool === 'draw') {
       if (draftVertexIds.length === 0) {
-        startDraftAtVertex(id);
+        // Drawing starts on a vertical plane through this vertex, turned to face the
+        // camera — frozen now so orbiting mid-face can't move it underneath the cursor.
+        startDrawingAt(
+          id,
+          verticalPlaneFacingCamera(position, {
+            x: camera.position.x,
+            y: camera.position.y,
+            z: camera.position.z,
+          }),
+        );
       } else if (id === draftVertexIds[0] && draftVertexIds.length >= 3) {
         closeDraftFace();
       } else if (!isInDraft) {
@@ -451,7 +503,8 @@ function SceneContent() {
       <GroundGrid />
       <VertexDragHandler />
       {mode === 'sketch' && <SketchPreview />}
-      {drawing && <BuildWorkPlane />}
+      {drawing && <DrawSurface />}
+      {drawing && <RubberBandSegment />}
       {drawing && <DraftFaceOutline />}
       {design.faces.map((f) => (
         <FaceMesh key={f.id} face={f} />
@@ -526,6 +579,20 @@ function CameraRig() {
   return null;
 }
 
+/** Esc abandons the face in progress, the way every drawing tool behaves. */
+function useEscapeCancelsDraft() {
+  const cancelDraft = useDesignStore((s) => s.cancelDraft);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      const { mode, buildTool, draftVertexIds } = useDesignStore.getState();
+      if (mode === 'build' && buildTool === 'draw' && draftVertexIds.length > 0) cancelDraft();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [cancelDraft]);
+}
+
 export function Viewport() {
   const selectVertex = useDesignStore((s) => s.selectVertex);
   const selectFace = useDesignStore((s) => s.selectFace);
@@ -533,6 +600,7 @@ export function Viewport() {
   const buildTool = useDesignStore((s) => s.buildTool);
   const cancelDraft = useDesignStore((s) => s.cancelDraft);
   const draggingVertexId = useDesignStore((s) => s.draggingVertexId);
+  useEscapeCancelsDraft();
 
   return (
     <div

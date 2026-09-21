@@ -141,6 +141,12 @@
   border-color: #2563eb;
 }
 
+/* The active-segment dialog, highlighted to match its rubber band in the viewport. */
+.inspector-group.next-point {
+  border-color: #fbbf24;
+  background: #1c1a12;
+}
+
 .inspector-group-title {
   font-size: 12px;
   font-weight: 700;

@@ -6,6 +6,7 @@ import { setEdgeLengthByMovingVertex, setInteriorAngleAtVertex, extrudeFace } fr
 import { solveDihedralAngle } from '../geometry/solver';
 import { reapplyAngleLocks } from '../geometry/relax';
 import { regularPolygonPoints } from '../geometry/polygons';
+import { planeThroughPoints, resolveNextPoint, type DrawPlane } from '../geometry/drawPlane';
 
 export type Mode = 'sketch' | 'build' | 'angles' | 'holes' | 'unfold';
 
@@ -44,9 +45,13 @@ interface DesignStoreState {
 
   // Face-by-face build draft (ordered vertex ids of the face being drawn)
   draftVertexIds: string[];
-  // Height (Z) of the horizontal work plane new draft vertices are placed on when
-  // clicking empty space in Build mode.
-  workPlaneZ: number;
+  /** The plane the face in progress is being drawn on; null when not drawing. */
+  drawPlane: DrawPlane | null;
+  /** Live cursor position on the draw plane, driving the rubber-band segment. */
+  drawCursor: Vec3 | null;
+  /** Typed-in constraints for the pending point; null means "follow the cursor". */
+  lockedLengthIn: number | null;
+  lockedAngleDeg: number | null;
   buildTool: BuildTool;
   /** Vertex currently being click-dragged with the Move tool, if any. */
   draggingVertexId: string | null;
@@ -72,13 +77,16 @@ interface DesignStoreState {
   createBasePolygon: (sides: number, widthIn: number) => void;
 
   // Build mode
-  startDraftAtVertex: (vertexId: string) => void;
   addDraftVertexById: (vertexId: string) => void;
   addDraftNewVertex: (p: Vec3) => void;
   closeDraftFace: (label?: string) => void;
   cancelDraft: () => void;
   pullUpFace: (faceId: string, heightIn: number) => void;
-  setWorkPlaneZ: (z: number) => void;
+  startDrawingAt: (vertexId: string, plane: DrawPlane) => void;
+  setDrawCursor: (p: Vec3 | null) => void;
+  setLockedLength: (lengthIn: number | null) => void;
+  setLockedAngle: (angleDeg: number | null) => void;
+  commitPendingPoint: () => void;
   setBuildTool: (tool: BuildTool) => void;
   setDraggingVertexId: (id: string | null) => void;
   frameView: () => void;
@@ -110,6 +118,39 @@ interface DesignStoreState {
   resetDesign: () => void;
 }
 
+/** The plane of a draft chain once it has enough points to define one. */
+function planeOfDraft(design: Design, draftVertexIds: string[]): DrawPlane | null {
+  if (draftVertexIds.length < 3) return null;
+  const points = draftVertexIds
+    .map((id) => design.vertices.find((v) => v.id === id)?.position)
+    .filter((p): p is Vec3 => !!p);
+  return planeThroughPoints(points);
+}
+
+/** Where the in-progress segment currently ends, or null if nothing is pending. */
+function pendingPointOf(s: DesignStoreState): Vec3 | null {
+  if (!s.drawPlane || s.draftVertexIds.length === 0) return null;
+  const lastId = s.draftVertexIds[s.draftVertexIds.length - 1];
+  const from = s.design.vertices.find((v) => v.id === lastId)?.position;
+  if (!from) return null;
+  // With both length and angle typed in, the point is fully determined without a cursor.
+  const cursor = s.drawCursor ?? from;
+  if (!s.drawCursor && (s.lockedLengthIn === null || s.lockedAngleDeg === null)) return null;
+  return resolveNextPoint(s.drawPlane, from, cursor, {
+    lengthIn: s.lockedLengthIn,
+    angleDeg: s.lockedAngleDeg,
+  });
+}
+
+/** Resets everything about a face-in-progress. */
+const CLEARED_DRAW_STATE = {
+  draftVertexIds: [] as string[],
+  drawPlane: null,
+  drawCursor: null,
+  lockedLengthIn: null,
+  lockedAngleDeg: null,
+} as const;
+
 function commit(state: DesignStoreState, nextDesign: Design): Pick<DesignStoreState, 'design' | 'past' | 'future'> {
   return {
     design: nextDesign,
@@ -129,7 +170,10 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
 
   openSketch: [],
   draftVertexIds: [],
-  workPlaneZ: 0,
+  drawPlane: null,
+  drawCursor: null,
+  lockedLengthIn: null,
+  lockedAngleDeg: null,
   buildTool: 'select',
   draggingVertexId: null,
   frameNonce: 0,
@@ -189,17 +233,49 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
       };
     }),
 
-  startDraftAtVertex: (vertexId) =>
-    set((s) => {
-      const vertex = s.design.vertices.find((v) => v.id === vertexId);
-      return { draftVertexIds: [vertexId], workPlaneZ: vertex ? vertex.position.z : s.workPlaneZ };
+  // Drawing begins on a plane chosen by the caller (which knows where the camera is).
+  startDrawingAt: (vertexId, plane) =>
+    set({
+      draftVertexIds: [vertexId],
+      drawPlane: plane,
+      drawCursor: null,
+      lockedLengthIn: null,
+      lockedAngleDeg: null,
     }),
 
-  setWorkPlaneZ: (z) => set({ workPlaneZ: z }),
+  setDrawCursor: (p) => set({ drawCursor: p }),
+  setLockedLength: (lengthIn) => set({ lockedLengthIn: lengthIn }),
+  setLockedAngle: (angleDeg) => set({ lockedAngleDeg: angleDeg }),
+
+  /**
+   * Places the pending point wherever the rubber band currently resolves to — from the
+   * cursor, from typed length/angle, or a mix. Locks are released afterward so the next
+   * segment starts free rather than silently inheriting the last one's constraints.
+   */
+  commitPendingPoint: () =>
+    set((s) => {
+      const pending = pendingPointOf(s);
+      if (!pending) return {};
+      const id = makeId('v');
+      const nextDesign: Design = {
+        ...s.design,
+        vertices: [...s.design.vertices, { id, position: pending }],
+      };
+      const draftVertexIds = [...s.draftVertexIds, id];
+      return {
+        design: nextDesign,
+        draftVertexIds,
+        // Three points fix the face's plane, so drawing switches onto it and every
+        // later point lands coplanar — which is what keeps the face unfoldable.
+        drawPlane: planeOfDraft(nextDesign, draftVertexIds) ?? s.drawPlane,
+        lockedLengthIn: null,
+        lockedAngleDeg: null,
+      };
+    }),
 
   // Switching tools abandons any half-drawn face, so the draft can't be left dangling
   // in a tool that has no way to finish it.
-  setBuildTool: (tool) => set((s) => (tool === s.buildTool ? {} : { buildTool: tool, draftVertexIds: [] })),
+  setBuildTool: (tool) => set((s) => (tool === s.buildTool ? {} : { buildTool: tool, ...CLEARED_DRAW_STATE })),
 
   setDraggingVertexId: (id) => set({ draggingVertexId: id }),
 
@@ -207,8 +283,14 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
 
   addDraftVertexById: (vertexId) =>
     set((s) => {
-      if (s.draftVertexIds.length === 0) return { draftVertexIds: [vertexId] };
-      return { draftVertexIds: [...s.draftVertexIds, vertexId] };
+      if (s.draftVertexIds.includes(vertexId)) return {};
+      const draftVertexIds = [...s.draftVertexIds, vertexId];
+      return {
+        draftVertexIds,
+        drawPlane: planeOfDraft(s.design, draftVertexIds) ?? s.drawPlane,
+        lockedLengthIn: null,
+        lockedAngleDeg: null,
+      };
     }),
 
   addDraftNewVertex: (p) =>
@@ -227,10 +309,10 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
         label: label ?? `Side ${s.design.faces.length}`,
       };
       const nextDesign: Design = { ...s.design, faces: [...s.design.faces, face] };
-      return { ...commit(s, nextDesign), draftVertexIds: [], selectedFaceId: face.id };
+      return { ...commit(s, nextDesign), ...CLEARED_DRAW_STATE, selectedFaceId: face.id };
     }),
 
-  cancelDraft: () => set({ draftVertexIds: [] }),
+  cancelDraft: () => set({ ...CLEARED_DRAW_STATE }),
 
   pullUpFace: (faceId, heightIn) =>
     set((s) => {

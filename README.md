@@ -31,11 +31,18 @@ The toolbar's five modes match the spec's workflow:
    - **Move** — click and drag a vertex to reshape every face touching it, live.
      Dragging slides it horizontally; hold Shift to move it straight up/down. Locked
      vertices don't budge.
-   - **Draw** — click a vertex to start a face, keep clicking to add edges (snapping to
-     existing vertices, or dropping new points on the work plane), and click the first
-     vertex again to close it. The work plane's height is settable, a ghost marker
-     previews exactly where the next point lands, and points can also be entered as
-     exact X/Y coordinates.
+   - **Draw** — click an existing point to start a face; a line then follows the cursor.
+     Click to place each next point, click the first point again (3+ points) to close
+     the face, Esc to cancel. While a segment is live, a sidebar dialog reads out its
+     length and angle-from-horizontal, and typing into either field locks it — so the
+     mouse only steers whatever is still free, and with both typed the point is exact
+     without any dragging.
+
+     Points land on a drawing plane, since a 2D cursor position has no single 3D
+     answer. That plane is vertical and camera-facing through the start point, frozen
+     so orbiting can't shift it mid-face; once three points are down they define the
+     face's plane outright and drawing switches onto it, which is also what keeps the
+     finished face planar and cleanly unfoldable.
 
    The "pull-up" shortcut extrudes the selected base face straight up by a numeric
    height — available, never automatic.

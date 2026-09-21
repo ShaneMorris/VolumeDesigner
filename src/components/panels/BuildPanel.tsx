@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useDesignStore, type BuildTool } from '../../store/designStore';
 import { VertexInspector } from './VertexInspector';
+import { NextPointPanel } from './NextPointPanel';
 import { NumberField } from '../ui/NumberField';
 
 const TOOL_LABELS: Record<BuildTool, string> = {
@@ -12,30 +13,23 @@ const TOOL_LABELS: Record<BuildTool, string> = {
 const TOOL_HINTS: Record<BuildTool, string> = {
   select: 'Click a vertex or face to select it for the numeric inspector, locking, or the pull-up shortcut.',
   move: 'Click and drag any vertex to move it. Dragging slides it horizontally; hold Shift while dragging to move it straight up and down. Locked vertices stay put.',
-  draw: 'Click an existing vertex to start a face, then keep clicking to add edges — click another vertex to snap to it, or click empty space to drop a new point on the work plane. Click the first vertex again (3+ points) to close the face. Right-click cancels.',
+  draw: 'Click an existing point to start a face. A line then follows the cursor — click to place each next point, typing an exact length/angle first if you want. Click the first point again (3+ points) to close the face. Esc cancels.',
 };
 
 export function BuildPanel() {
   const design = useDesignStore((s) => s.design);
   const draftVertexIds = useDesignStore((s) => s.draftVertexIds);
-  const cancelDraft = useDesignStore((s) => s.cancelDraft);
-  const closeDraftFace = useDesignStore((s) => s.closeDraftFace);
   const selectedVertexId = useDesignStore((s) => s.selectedVertexId);
   const selectedFaceId = useDesignStore((s) => s.selectedFaceId);
   const renameFace = useDesignStore((s) => s.renameFace);
   const deleteFace = useDesignStore((s) => s.deleteFace);
   const pullUpFace = useDesignStore((s) => s.pullUpFace);
   const setBaseFaceId = useDesignStore((s) => s.setBaseFaceId);
-  const workPlaneZ = useDesignStore((s) => s.workPlaneZ);
-  const setWorkPlaneZ = useDesignStore((s) => s.setWorkPlaneZ);
   const setVerticesLocked = useDesignStore((s) => s.setVerticesLocked);
   const buildTool = useDesignStore((s) => s.buildTool);
   const setBuildTool = useDesignStore((s) => s.setBuildTool);
-  const addDraftNewVertex = useDesignStore((s) => s.addDraftNewVertex);
 
   const [pullHeight, setPullHeight] = useState(3);
-  const [exactX, setExactX] = useState(0);
-  const [exactY, setExactY] = useState(0);
   const selectedFace = design.faces.find((f) => f.id === selectedFaceId);
   const baseFace = design.faces.find((f) => f.id === design.baseFaceId);
   const baseVertices = baseFace ? design.vertices.filter((v) => baseFace.vertexIds.includes(v.id)) : [];
@@ -59,42 +53,10 @@ export function BuildPanel() {
       {buildTool === 'draw' && (
         <>
           <div className="status-row">
-            {draftVertexIds.length === 0 && 'No face in progress — click an existing vertex to start one.'}
-            {draftVertexIds.length > 0 && `Drawing face: ${draftVertexIds.length} point(s) picked.`}
+            {draftVertexIds.length === 0 && 'No face in progress — click an existing point to start one.'}
+            {draftVertexIds.length > 0 && `Drawing face: ${draftVertexIds.length} point(s) placed.`}
           </div>
-          {draftVertexIds.length > 0 && (
-            <>
-              <NumberField
-                label="Work plane height (Z)"
-                value={workPlaneZ}
-                suffix="in"
-                onCommit={setWorkPlaneZ}
-              />
-              <p className="panel-hint">
-                Clicks on empty space land on this horizontal plane (the blue grid). A yellow ghost marker
-                shows exactly where the point will go before you click. Adjust the height between clicks to
-                place points at different levels.
-              </p>
-
-              <div className="inspector-group">
-                <div className="inspector-group-title">Add point by exact coordinates</div>
-                <NumberField label="X" value={exactX} suffix="in" onCommit={setExactX} />
-                <NumberField label="Y" value={exactY} suffix="in" onCommit={setExactY} />
-                <div className="button-row">
-                  <button onClick={() => addDraftNewVertex({ x: exactX, y: exactY, z: workPlaneZ })}>
-                    Add point at X/Y, Z={workPlaneZ}
-                  </button>
-                </div>
-              </div>
-
-              <div className="button-row">
-                <button onClick={cancelDraft}>Cancel</button>
-                <button disabled={draftVertexIds.length < 3} className="primary" onClick={() => closeDraftFace()}>
-                  Close Face
-                </button>
-              </div>
-            </>
-          )}
+          <NextPointPanel />
         </>
       )}
 
