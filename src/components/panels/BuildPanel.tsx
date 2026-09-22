@@ -15,7 +15,7 @@ const TOOL_LABELS: Record<BuildTool, string> = {
 const TOOL_HINTS: Record<BuildTool, string> = {
   select: 'Click a vertex, edge or face to select it — for the numeric inspector, locking, the pull-up shortcut, or deleting. Del removes the selection.',
   move: 'Drag a vertex to move it, or grab an edge to move the whole edge. Dragging slides horizontally; hold Shift to move straight up and down. Motion is limited to whatever keeps every face flat, so some points barely move and some cannot move at all — the panel says what is holding them.',
-  draw: 'Click an existing point to start a face. A line then follows the cursor — click to place each next point, typing an exact length/angle first if you want. Connecting the line back to any existing point closes the face (Shift-click to route through it and keep drawing instead). Esc cancels.',
+  draw: 'Click anywhere to start drawing — an existing point, a point along an edge, or empty space. A line then follows the cursor; click to place each next point, or type an exact length, angle and height first. Every segment is drawn for real as you go, so Esc just stops and what you drew stays. A face appears on its own when the edges close a loop.',
 };
 
 export function BuildPanel() {
@@ -78,8 +78,9 @@ export function BuildPanel() {
       {buildTool === 'draw' && (
         <>
           <div className="status-row">
-            {draftVertexIds.length === 0 && 'No face in progress — click an existing point to start one.'}
-            {draftVertexIds.length > 0 && `Drawing face: ${draftVertexIds.length} point(s) placed.`}
+            {draftVertexIds.length === 0 && 'Click anywhere to start a chain of edges.'}
+            {draftVertexIds.length > 0 &&
+              `Drawing: ${draftVertexIds.length} point(s), ${Math.max(0, draftVertexIds.length - 1)} edge(s) committed.`}
           </div>
           <NextPointPanel />
         </>
@@ -105,7 +106,7 @@ export function BuildPanel() {
 
           <div className="inspector-group-title">Vertex locking</div>
           <p className="panel-hint">
-            A locked vertex can still be clicked to start/close a face, but the Move tool won't budge it.
+            A locked vertex can still be drawn from and drawn to, but the Move tool won't budge it.
           </p>
           <div className="button-row">
             <button onClick={() => setVerticesLocked(baseVertices.map((v) => v.id), !baseFullyLocked)}>

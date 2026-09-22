@@ -117,6 +117,7 @@ function DrawSurface() {
 
   if (draftVertexIds.length === 0 || !drawPlane) return null;
 
+
   // The draw surface is a construction aid, so real geometry under the pointer wins
   // over it: skip placing a point and leave propagation alone, letting the handle's own
   // onClick run. Vertices and faces need different rules, because they differ in size.
@@ -145,9 +146,55 @@ function DrawSurface() {
         setDrawCursor({ x: e.point.x, y: e.point.y, z: e.point.z });
         commitPendingPoint();
       }}
+      onPointerMissed={undefined}
     >
       <planeGeometry args={[size, size]} />
       <meshBasicMaterial color="#7dd3fc" transparent opacity={0.06} side={THREE.DoubleSide} />
+    </mesh>
+  );
+}
+
+/**
+ * Where a chain begins when it doesn't begin on existing geometry.
+ *
+ * A first point has no previous point to hang a plane off, so it lands on the work area
+ * itself — the one plane that's always meaningful. After that the chain's own plane takes
+ * over. Without this, drawing could only ever start from something already drawn, which
+ * rules out roughing in a shape from nothing.
+ */
+function ChainStartSurface() {
+  const draftVertexIds = useDesignStore((s) => s.draftVertexIds);
+  const basePlaneSizeIn = useDesignStore((s) => s.design.basePlaneSizeIn);
+  const startChainAtPoint = useDesignStore((s) => s.startChainAtPoint);
+  const { camera } = useThree();
+  const size = useDrawSurfaceSize();
+
+  if (draftVertexIds.length > 0) return null;
+
+  return (
+    <mesh
+      visible={false}
+      onClick={(e) => {
+        // Existing geometry under the pointer has its own handlers and wins.
+        if (e.intersections.some((i) => i.object.userData?.isVertexHandle || i.object.userData?.isEdgeHandle)) {
+          return;
+        }
+        e.stopPropagation();
+        const half = basePlaneSizeIn / 2;
+        const clamp = (value: number) => Math.min(half, Math.max(-half, value));
+        const origin = { x: clamp(e.point.x), y: clamp(e.point.y), z: 0 };
+        startChainAtPoint(
+          origin,
+          verticalPlaneFacingCamera(origin, {
+            x: camera.position.x,
+            y: camera.position.y,
+            z: camera.position.z,
+          }),
+        );
+      }}
+    >
+      <planeGeometry args={[size, size]} />
+      <meshBasicMaterial />
     </mesh>
   );
 }
@@ -358,8 +405,7 @@ function VertexHandle({ id, position, locked }: { id: string; position: Vec3; lo
   const draggingVertexId = useDesignStore((s) => s.draggingVertexId);
   const selectVertex = useDesignStore((s) => s.selectVertex);
   const startDrawingAt = useDesignStore((s) => s.startDrawingAt);
-  const addDraftVertexById = useDesignStore((s) => s.addDraftVertexById);
-  const closeDraftFace = useDesignStore((s) => s.closeDraftFace);
+  const extendChainTo = useDesignStore((s) => s.extendChainTo);
   const beginVertexDrag = useDesignStore((s) => s.beginVertexDrag);
 
   const baseRadius = useHandleRadius();
@@ -385,12 +431,10 @@ function VertexHandle({ id, position, locked }: { id: string; position: Vec3; lo
           }),
         );
       } else {
-        // Connecting the line to an existing point finishes the face. Shift-click
-        // instead routes through the point and keeps drawing, for a face that runs
-        // along several existing corners before it closes.
-        const lengthAfter = isInDraft ? draftVertexIds.length : draftVertexIds.length + 1;
-        if (!isInDraft) addDraftVertexById(id);
-        if (lengthAfter >= 3 && !e.shiftKey) closeDraftFace();
+        // Just another segment. If it closes a loop a face appears on its own, and if it
+        // cuts across a face that face divides — neither needs a gesture of its own, so
+        // there is nothing here about finishing or routing through.
+        extendChainTo(id);
       }
       return;
     }
@@ -521,14 +565,18 @@ function FaceEdges({ face }: { face: Face }) {
   const selectEdgePair = useDesignStore((s) => s.selectEdgePair);
   const beginEdgeDrag = useDesignStore((s) => s.beginEdgeDrag);
   const draggingEdge = useDesignStore((s) => s.draggingEdge);
+  const chainThroughEdge = useDesignStore((s) => s.chainThroughEdge);
+  const { camera } = useThree();
   const handleRadius = useHandleRadius();
   const positions = facePositions(design, face);
   const points = [...positions, positions[0]].map((p) => new THREE.Vector3(p.x, p.y, p.z));
 
-  // Edges answer to the pointer in both tools: Select picks them, Move drags them whole.
+  // Edges answer to the pointer in all three tools: Select picks them, Move drags them
+  // whole, Draw runs a chain onto them.
   const selectable = mode === 'build' && buildTool === 'select';
   const draggable = mode === 'build' && buildTool === 'move';
-  const pickable = selectable || draggable;
+  const drawable = mode === 'build' && buildTool === 'draw';
+  const pickable = selectable || draggable || drawable;
   const n = face.vertexIds.length;
 
   return (
@@ -559,6 +607,22 @@ function FaceEdges({ face }: { face: Face }) {
                 )}
                 visible={false}
                 onClick={(e) => {
+                  if (drawable) {
+                    // Landing "near" an edge isn't good enough — a point a hundredth of an
+                    // inch off the line is a different and worse thing than one on it. The
+                    // edge is split at the click so the point is genuinely on it.
+                    e.stopPropagation();
+                    chainThroughEdge(
+                      a,
+                      b,
+                      { x: e.point.x, y: e.point.y, z: e.point.z },
+                      verticalPlaneFacingCamera(
+                        { x: e.point.x, y: e.point.y, z: e.point.z },
+                        { x: camera.position.x, y: camera.position.y, z: camera.position.z },
+                      ),
+                    );
+                    return;
+                  }
                   if (!selectable) return;
                   e.stopPropagation();
                   selectEdgePair({ a, b });
@@ -630,6 +694,7 @@ function SceneContent() {
       <VertexDragHandler />
       <EdgeDragHandler />
       {mode === 'sketch' && <SketchPreview />}
+      {drawing && <ChainStartSurface />}
       {drawing && <DrawSurface />}
       {drawing && <RubberBandSegment />}
       {drawing && <DraftFaceOutline />}
@@ -723,7 +788,7 @@ function useViewportKeyboard() {
 
       if (e.key === 'Escape') {
         if (store.mode === 'build' && store.buildTool === 'draw' && store.draftVertexIds.length > 0) {
-          store.cancelDraft();
+          store.endChain();
         }
         return;
       }
@@ -751,7 +816,7 @@ export function Viewport() {
   const selectFace = useDesignStore((s) => s.selectFace);
   const mode = useDesignStore((s) => s.mode);
   const buildTool = useDesignStore((s) => s.buildTool);
-  const cancelDraft = useDesignStore((s) => s.cancelDraft);
+  const endChain = useDesignStore((s) => s.endChain);
   const draggingVertexId = useDesignStore((s) => s.draggingVertexId);
   const draggingEdge = useDesignStore((s) => s.draggingEdge);
   useViewportKeyboard();
@@ -761,7 +826,7 @@ export function Viewport() {
       style={{ width: '100%', height: '100%', background: '#0f1115' }}
       onContextMenu={(e) => {
         e.preventDefault();
-        if (mode === 'build' && buildTool === 'draw') cancelDraft();
+        if (mode === 'build' && buildTool === 'draw') endChain();
       }}
     >
       <Canvas

@@ -48,58 +48,59 @@ describe('setBasePlaneSize', () => {
   });
 });
 
-describe('abandoning a half-drawn face', () => {
+describe('a chain commits as it is drawn', () => {
+  const plane = {
+    origin: { x: 0, y: 0, z: 0 },
+    u: { x: 1, y: 0, z: 0 },
+    v: { x: 0, y: 0, z: 1 },
+    normal: { x: 0, y: 1, z: 0 },
+  };
+
   beforeEach(() => useDesignStore.getState().loadDesign(seedWall()));
 
-  it('removes the points it placed instead of stranding them in the model', () => {
+  it('keeps the points it placed when the chain is stopped', () => {
     const store = useDesignStore.getState();
-    store.startDrawingAt('a', {
-      origin: { x: 0, y: 0, z: 0 },
-      u: { x: 1, y: 0, z: 0 },
-      v: { x: 0, y: 0, z: 1 },
-      normal: { x: 0, y: 1, z: 0 },
-    });
-    // A stray click a long way out — exactly what used to inflate every handle.
-    useDesignStore.getState().setDrawCursor({ x: 900, y: 0, z: 40 });
-    useDesignStore.getState().commitPendingPoint();
-    expect(useDesignStore.getState().design.vertices.length).toBe(4);
-
-    useDesignStore.getState().cancelDraft();
-    expect(useDesignStore.getState().design.vertices.length).toBe(3);
-    expect(useDesignStore.getState().design.vertices.some((v) => v.position.x === 900)).toBe(false);
-  });
-
-  it('cleans up the same way when the tool is switched mid-draw', () => {
-    const store = useDesignStore.getState();
-    store.setBuildTool('draw');
-    store.startDrawingAt('a', {
-      origin: { x: 0, y: 0, z: 0 },
-      u: { x: 1, y: 0, z: 0 },
-      v: { x: 0, y: 0, z: 1 },
-      normal: { x: 0, y: 1, z: 0 },
-    });
+    store.startDrawingAt('a', plane);
     useDesignStore.getState().setDrawCursor({ x: 2, y: 0, z: 5 });
     useDesignStore.getState().commitPendingPoint();
     expect(useDesignStore.getState().design.vertices.length).toBe(4);
 
-    useDesignStore.getState().setBuildTool('select');
-    expect(useDesignStore.getState().design.vertices.length).toBe(3);
+    // Stopping is not abandoning: the segment was real the moment it was drawn, which is
+    // what allows a defining edge to be drawn exactly and left standing.
+    useDesignStore.getState().endChain();
+    expect(useDesignStore.getState().design.vertices.length).toBe(4);
+    expect(useDesignStore.getState().draftVertexIds).toEqual([]);
   });
 
-  it('keeps the points once they belong to a finished face', () => {
+  it('keeps them across a tool switch too', () => {
     const store = useDesignStore.getState();
-    store.startDrawingAt('a', {
-      origin: { x: 0, y: 0, z: 0 },
-      u: { x: 1, y: 0, z: 0 },
-      v: { x: 0, y: 0, z: 1 },
-      normal: { x: 0, y: 1, z: 0 },
-    });
-    for (const z of [4, 6]) {
-      useDesignStore.getState().setDrawCursor({ x: 2, y: 0, z });
-      useDesignStore.getState().commitPendingPoint();
-    }
-    useDesignStore.getState().closeDraftFace();
-    expect(useDesignStore.getState().design.faces.length).toBe(2);
-    expect(useDesignStore.getState().design.vertices.length).toBe(5);
+    store.setBuildTool('draw');
+    store.startDrawingAt('a', plane);
+    useDesignStore.getState().setDrawCursor({ x: 2, y: 0, z: 5 });
+    useDesignStore.getState().commitPendingPoint();
+
+    useDesignStore.getState().setBuildTool('select');
+    expect(useDesignStore.getState().design.vertices.length).toBe(4);
+  });
+
+  it('commits an edge with every point, not just at the end', () => {
+    const store = useDesignStore.getState();
+    const edgesBefore = useDesignStore.getState().design.edges.length;
+    store.startDrawingAt('a', plane);
+    useDesignStore.getState().setDrawCursor({ x: 2, y: 0, z: 5 });
+    useDesignStore.getState().commitPendingPoint();
+    expect(useDesignStore.getState().design.edges.length).toBe(edgesBefore + 1);
+  });
+
+  it('raises a face on its own once the chain closes a loop', () => {
+    const store = useDesignStore.getState();
+    const facesBefore = useDesignStore.getState().design.faces.length;
+    // a and c are already joined by the wall, so running a chain a -> new -> c encloses
+    // a triangle without any "close the face" gesture.
+    store.startDrawingAt('a', plane);
+    useDesignStore.getState().setDrawCursor({ x: -3, y: 0, z: 2 });
+    useDesignStore.getState().commitPendingPoint();
+    useDesignStore.getState().extendChainTo('c');
+    expect(useDesignStore.getState().design.faces.length).toBe(facesBefore + 1);
   });
 });

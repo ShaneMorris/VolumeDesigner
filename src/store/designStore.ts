@@ -4,7 +4,9 @@ import { clampBasePlaneSize, createEmptyDesign, edgeKey } from '../geometry/type
 import { deriveEdges, faceEdgeKeys, findSharedEdge, getFace, isFacePlanar } from '../geometry/mesh';
 import { edgesTouchingVertex, orphanVertexIds, removeEdgeKeys, withFaceEdges } from '../geometry/edges';
 import { normalizeDesign, type RawDesign } from '../geometry/normalize';
-import { splitEdgeAt, splitFace } from '../geometry/split';
+import { splitEdgeAt, splitFace, parameterAlongEdge } from '../geometry/split';
+import { faceFromNewEdge } from '../geometry/loops';
+import { addEdge, hasEdge } from '../geometry/edges';
 import { validateDesign, type DesignIssue } from '../geometry/validate';
 import { setEdgeLengthByMovingVertex, setInteriorAngleAtVertex, extrudeFace } from '../geometry/edit';
 import { solveDihedralAngle } from '../geometry/solver';
@@ -54,7 +56,13 @@ interface DesignStoreState {
   // Base polygon sketch draft (raw positions, not yet committed to the design)
   openSketch: Vec3[];
 
-  // Face-by-face build draft (ordered vertex ids of the face being drawn)
+  /**
+   * The chain of points being drawn, most recent last.
+   *
+   * Only the chain is a draft — every edge it lays down is committed as it's drawn, so
+   * ending a chain keeps the geometry. That's what lets a defining edge be drawn exactly
+   * and left standing while the rest of its face is worked out (requirements §3).
+   */
   draftVertexIds: string[];
   /** The plane the face in progress is being drawn on; null when not drawing. */
   drawPlane: DrawPlane | null;
@@ -63,8 +71,12 @@ interface DesignStoreState {
   /** Typed-in constraints for the pending point; null means "follow the cursor". */
   lockedLengthIn: number | null;
   lockedAngleDeg: number | null;
-  /** Points this draft created, so abandoning it removes exactly those. */
-  draftCreatedVertexIds: string[];
+  /**
+   * A typed target height (world Z) for the pending point, which stands in for length.
+   * "45 degrees rising to 4 inches" is the shape of these constraints as they actually
+   * arrive; without this, the length would have to be worked out by trigonometry first.
+   */
+  lockedHeightIn: number | null;
   buildTool: BuildTool;
   /** Vertex currently being click-dragged with the Move tool, if any. */
   draggingVertexId: string | null;
@@ -113,15 +125,20 @@ interface DesignStoreState {
   createBasePolygon: (sides: number, widthIn: number) => void;
 
   // Build mode
-  addDraftVertexById: (vertexId: string) => void;
-  addDraftNewVertex: (p: Vec3) => void;
-  closeDraftFace: (label?: string) => void;
-  cancelDraft: () => void;
+  /** Continue the chain to an existing point, committing the edge to it. */
+  extendChainTo: (vertexId: string) => void;
+  /** Begin a chain in empty space rather than on an existing point. */
+  startChainAtPoint: (p: Vec3, plane: DrawPlane) => void;
+  /** Begin or continue a chain at a point along an existing edge, splitting it there. */
+  chainThroughEdge: (a: string, b: string, at: Vec3, plane: DrawPlane) => void;
+  /** Esc: stop drawing. Everything already drawn stays. */
+  endChain: () => void;
   pullUpFace: (faceId: string, heightIn: number) => void;
   startDrawingAt: (vertexId: string, plane: DrawPlane) => void;
   setDrawCursor: (p: Vec3 | null) => void;
   setLockedLength: (lengthIn: number | null) => void;
   setLockedAngle: (angleDeg: number | null) => void;
+  setLockedHeight: (heightIn: number | null) => void;
   commitPendingPoint: () => void;
   setBuildTool: (tool: BuildTool) => void;
   frameView: () => void;
@@ -187,30 +204,30 @@ function pendingPointOf(s: DesignStoreState): Vec3 | null {
   const lastId = s.draftVertexIds[s.draftVertexIds.length - 1];
   const from = s.design.vertices.find((v) => v.id === lastId)?.position;
   if (!from) return null;
-  // With both length and angle typed in, the point is fully determined without a cursor.
+  // A typed target height stands in for length: with an angle to rise at and a height to
+  // reach, the distance along the segment follows, which is the calculation the user would
+  // otherwise be doing by hand.
+  let lengthIn = s.lockedLengthIn;
+  if (lengthIn === null && s.lockedHeightIn !== null && s.lockedAngleDeg !== null) {
+    const rise = s.lockedHeightIn - from.z;
+    const sin = Math.sin((s.lockedAngleDeg * Math.PI) / 180);
+    if (Math.abs(sin) > 1e-6) lengthIn = Math.abs(rise / sin);
+  }
+
+  const fullyTyped = lengthIn !== null && s.lockedAngleDeg !== null;
   const cursor = s.drawCursor ?? from;
-  if (!s.drawCursor && (s.lockedLengthIn === null || s.lockedAngleDeg === null)) return null;
-  return resolveNextPoint(s.drawPlane, from, cursor, {
-    lengthIn: s.lockedLengthIn,
-    angleDeg: s.lockedAngleDeg,
-  });
+  if (!s.drawCursor && !fullyTyped) return null;
+  return resolveNextPoint(s.drawPlane, from, cursor, { lengthIn, angleDeg: s.lockedAngleDeg });
 }
 
 /**
- * Drops the points a half-drawn face created, when that face is abandoned. Points are
- * added to the design as they're placed, so without this they'd be stranded in the model.
- *
- * Only the draft's own creations are removed, never every unused vertex: deleting an edge
- * deliberately leaves its corners behind so the faces can be redrawn on them, and a blunt
- * "remove anything no face uses" sweep would wipe exactly those on the next tool switch.
+ * Adds an edge between the last two points of a chain and works out what it brought into
+ * being — a face closed, a face divided, or nothing yet. The edge is kept either way.
  */
-function discardDraftVertices(design: Design, draftCreatedVertexIds: string[]): Design {
-  if (draftCreatedVertexIds.length === 0) return design;
-  const used = new Set<string>();
-  for (const face of design.faces) for (const id of face.vertexIds) used.add(id);
-  const doomed = new Set(draftCreatedVertexIds.filter((id) => !used.has(id)));
-  if (doomed.size === 0) return design;
-  return { ...design, vertices: design.vertices.filter((v) => !doomed.has(v.id)) };
+function absorbSegment(design: Design, from: string, to: string): { design: Design; refusal?: string } {
+  const withEdge = addEdge(design, from, to);
+  const outcome = faceFromNewEdge(withEdge, from, to, () => makeId('f'));
+  return { design: outcome.design, refusal: outcome.refusal };
 }
 
 /**
@@ -233,11 +250,11 @@ function removeFaces(design: Design, faceIds: Set<string>): Design {
 /** Resets everything about a face-in-progress. */
 const CLEARED_DRAW_STATE = {
   draftVertexIds: [] as string[],
-  draftCreatedVertexIds: [] as string[],
   drawPlane: null,
   drawCursor: null,
   lockedLengthIn: null,
   lockedAngleDeg: null,
+  lockedHeightIn: null,
 } as const;
 
 function commit(state: DesignStoreState, nextDesign: Design): Pick<DesignStoreState, 'design' | 'past' | 'future'> {
@@ -264,7 +281,7 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
   drawCursor: null,
   lockedLengthIn: null,
   lockedAngleDeg: null,
-  draftCreatedVertexIds: [],
+  lockedHeightIn: null,
   buildTool: 'select',
   draggingVertexId: null,
   draggingEdge: null,
@@ -340,95 +357,138 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
       drawCursor: null,
       lockedLengthIn: null,
       lockedAngleDeg: null,
+      lockedHeightIn: null,
+    }),
+
+  /** Starting in empty space: the point is real from the moment it's placed. */
+  startChainAtPoint: (p, plane) =>
+    set((s) => {
+      const id = makeId('v');
+      const nextDesign: Design = { ...s.design, vertices: [...s.design.vertices, { id, position: p }] };
+      return {
+        ...commit(s, nextDesign),
+        draftVertexIds: [id],
+        drawPlane: plane,
+        drawCursor: null,
+        lockedLengthIn: null,
+        lockedAngleDeg: null,
+        lockedHeightIn: null,
+      };
+    }),
+
+  /**
+   * Beginning or continuing a chain partway along an existing edge. The edge is split at
+   * that point first, so the new vertex is genuinely on the line rather than merely near
+   * it — which is the difference between geometry that closes and geometry that looks like
+   * it should have.
+   */
+  chainThroughEdge: (a, b, at, plane) =>
+    set((s) => {
+      const t = parameterAlongEdge(s.design, a, b, at);
+      const split = splitEdgeAt(s.design, a, b, t, () => makeId('v'));
+      if (!split.ok) return { actionError: split.reason };
+
+      const chain = s.draftVertexIds;
+      if (chain.length === 0) {
+        return {
+          ...commit(s, split.design),
+          draftVertexIds: [split.vertexId],
+          drawPlane: plane,
+          drawCursor: null,
+          lockedLengthIn: null,
+          lockedAngleDeg: null,
+          lockedHeightIn: null,
+          actionError: null,
+        };
+      }
+      const joined = absorbSegment(split.design, chain[chain.length - 1], split.vertexId);
+      const draftVertexIds = [...chain, split.vertexId];
+      return {
+        ...commit(s, joined.design),
+        draftVertexIds,
+        drawPlane: planeOfDraft(joined.design, draftVertexIds) ?? s.drawPlane,
+        lockedLengthIn: null,
+        lockedAngleDeg: null,
+        lockedHeightIn: null,
+        actionError: joined.refusal ?? null,
+      };
     }),
 
   setDrawCursor: (p) => set({ drawCursor: p }),
   setLockedLength: (lengthIn) => set({ lockedLengthIn: lengthIn }),
   setLockedAngle: (angleDeg) => set({ lockedAngleDeg: angleDeg }),
+  setLockedHeight: (heightIn) => set({ lockedHeightIn: heightIn }),
 
   /**
    * Places the pending point wherever the rubber band currently resolves to — from the
-   * cursor, from typed length/angle, or a mix. Locks are released afterward so the next
-   * segment starts free rather than silently inheriting the last one's constraints.
+   * cursor, from typed length/angle/height, or a mix — and commits the segment to it.
+   *
+   * The edge is real immediately. That is the whole change: there is no half-drawn state
+   * to lose, so a chain can be stopped at any point and what was drawn stays (§3).
    */
   commitPendingPoint: () =>
     set((s) => {
       const pending = pendingPointOf(s);
-      if (!pending) return {};
+      if (!pending || s.draftVertexIds.length === 0) return {};
       const id = makeId('v');
-      const nextDesign: Design = {
+      const withVertex: Design = {
         ...s.design,
         vertices: [...s.design.vertices, { id, position: pending }],
       };
+      const previous = s.draftVertexIds[s.draftVertexIds.length - 1];
+      const joined = absorbSegment(withVertex, previous, id);
       const draftVertexIds = [...s.draftVertexIds, id];
       return {
-        design: nextDesign,
+        ...commit(s, joined.design),
         draftVertexIds,
-        draftCreatedVertexIds: [...s.draftCreatedVertexIds, id],
         // Three points fix the face's plane, so drawing switches onto it and every
         // later point lands coplanar — which is what keeps the face unfoldable.
-        drawPlane: planeOfDraft(nextDesign, draftVertexIds) ?? s.drawPlane,
+        drawPlane: planeOfDraft(joined.design, draftVertexIds) ?? s.drawPlane,
         lockedLengthIn: null,
         lockedAngleDeg: null,
+        lockedHeightIn: null,
+        actionError: joined.refusal ?? null,
       };
     }),
 
-  // Switching tools abandons any half-drawn face, so the draft can't be left dangling
-  // in a tool that has no way to finish it.
+  // Switching tools ends any chain in progress. Nothing is discarded — every segment was
+  // committed as it was drawn, so there is no half-drawn state left to lose.
   setBuildTool: (tool) =>
-    set((s) =>
-      tool === s.buildTool
-        ? {}
-        : {
-            buildTool: tool,
-            ...CLEARED_DRAW_STATE,
-            design: discardDraftVertices(s.design, s.draftCreatedVertexIds),
-          },
-    ),
+    set((s) => (tool === s.buildTool ? {} : { buildTool: tool, ...CLEARED_DRAW_STATE })),
 
   frameView: () => set((s) => ({ frameNonce: s.frameNonce + 1 })),
 
 
-  addDraftVertexById: (vertexId) =>
+  /**
+   * Runs the chain into an existing point. If that closes a loop a face appears, and if it
+   * crosses a face the face divides — but either way this is just another segment, which is
+   * why there is no separate gesture for finishing a face any more.
+   */
+  extendChainTo: (vertexId) =>
     set((s) => {
-      if (s.draftVertexIds.includes(vertexId)) return {};
-      const draftVertexIds = [...s.draftVertexIds, vertexId];
+      const chain = s.draftVertexIds;
+      if (chain.length === 0) return {};
+      const previous = chain[chain.length - 1];
+      if (previous === vertexId) return {};
+      if (hasEdge(s.design, previous, vertexId) && chain.includes(vertexId)) {
+        // Already joined and already in this chain: nothing new to draw.
+        return { draftVertexIds: [...chain, vertexId], lockedLengthIn: null, lockedAngleDeg: null, lockedHeightIn: null };
+      }
+      const joined = absorbSegment(s.design, previous, vertexId);
+      const draftVertexIds = [...chain, vertexId];
       return {
+        ...commit(s, joined.design),
         draftVertexIds,
-        drawPlane: planeOfDraft(s.design, draftVertexIds) ?? s.drawPlane,
+        drawPlane: planeOfDraft(joined.design, draftVertexIds) ?? s.drawPlane,
         lockedLengthIn: null,
         lockedAngleDeg: null,
+        lockedHeightIn: null,
+        actionError: joined.refusal ?? null,
       };
     }),
 
-  addDraftNewVertex: (p) =>
-    set((s) => {
-      const id = makeId('v');
-      const nextDesign: Design = { ...s.design, vertices: [...s.design.vertices, { id, position: p }] };
-      return {
-        design: nextDesign,
-        draftVertexIds: [...s.draftVertexIds, id],
-        draftCreatedVertexIds: [...s.draftCreatedVertexIds, id],
-      };
-    }),
-
-  closeDraftFace: (label) =>
-    set((s) => {
-      if (s.draftVertexIds.length < 3) return {};
-      const face: Face = {
-        id: makeId('f'),
-        vertexIds: [...s.draftVertexIds],
-        label: label ?? `Side ${s.design.faces.length}`,
-      };
-      const nextDesign = withFaceEdges({ ...s.design, faces: [...s.design.faces, face] });
-      return { ...commit(s, nextDesign), ...CLEARED_DRAW_STATE, selectedFaceId: face.id };
-    }),
-
-  cancelDraft: () =>
-    set((s) => ({
-      ...CLEARED_DRAW_STATE,
-      design: discardDraftVertices(s.design, s.draftCreatedVertexIds),
-    })),
+  /** Stops drawing. Everything already drawn stays exactly where it is. */
+  endChain: () => set({ ...CLEARED_DRAW_STATE }),
 
   pullUpFace: (faceId, heightIn) =>
     set((s) => {

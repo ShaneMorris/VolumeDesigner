@@ -75,18 +75,28 @@ The toolbar's five modes match the spec's workflow:
      Two separate limits are at work and the panel distinguishes them: planarity decides
      *which way* a move can go, while the area and self-intersection rules decide *how far*,
      stopping a drag before a face becomes a sliver or folds over itself.
-   - **Draw** — click an existing point to start a face; a line then follows the cursor.
-     Click to place each next point, click the first point again (3+ points) to close
-     the face, Esc to cancel. While a segment is live, a sidebar dialog reads out its
-     length and angle-from-horizontal, and typing into either field locks it — so the
-     mouse only steers whatever is still free, and with both typed the point is exact
-     without any dragging.
+   - **Draw** — start anywhere: an existing point, a point along an edge, or empty space.
+     A line then follows the cursor; click to place each next point.
 
-     Points land on a drawing plane, since a 2D cursor position has no single 3D
-     answer. That plane is vertical and camera-facing through the start point, frozen
-     so orbiting can't shift it mid-face; once three points are down they define the
-     face's plane outright and drawing switches onto it, which is also what keeps the
-     finished face planar and cleanly unfoldable.
+     **Every segment is committed as it's drawn**, so Esc doesn't cancel — it just stops,
+     and what you drew stays. That's what lets a defining edge be got exactly right and
+     left standing while the rest of its face is worked out, which is how the design work
+     actually goes. There is no "close the face" gesture either: a face appears on its own
+     when edges enclose something.
+
+     The sidebar dialog takes a **length, an angle from horizontal, and a target height**,
+     and typing into a field locks it. Height stands in for length, so "45° rising to 4in"
+     is two typed numbers rather than a length you first have to work out (it's 5.657in). A
+     typed length wins if you set both.
+
+     Clicking near an edge splits that edge at the click, so the point lands *exactly* on
+     the line rather than a hundredth of an inch off it — the difference between geometry
+     that closes and geometry that looks like it should have.
+
+     Points land on a drawing plane, since a 2D cursor position has no single 3D answer.
+     That plane is vertical and camera-facing through the start point, frozen so orbiting
+     can't shift it mid-chain; once three points are down they define a plane outright and
+     drawing switches onto it, which is what keeps a finished face planar and unfoldable.
 
    The "pull-up" shortcut extrudes the selected base face straight up by a numeric
    height — available, never automatic.
@@ -119,6 +129,13 @@ the current solid.
   identified by its endpoint pair rather than an id of its own, so "the same edge twice" is
   unrepresentable. `edges.ts` keeps the edge set and the face loops in step — anything that
   creates a face runs `withFaceEdges`, so no caller has to remember to.
+- `src/geometry/loops.ts` — what a newly drawn edge brings into being. An edge between two
+  corners of an existing face **divides** it, and goes to `splitFace` so the parent's label,
+  holes and angle locks are handed on deliberately. Otherwise the edge may have **closed** a
+  loop, found by breadth-first search for the smallest one through it that is coplanar,
+  encloses real area, has no chord across it, and wouldn't put a third face on any edge.
+  Two equally small loops means the edge closed more than one thing at once, so nothing is
+  created and the user says what they meant — the edges stay either way.
 - `src/geometry/constrain.ts` — the null-space solver behind Move. Builds the linear
   constraints a translation must satisfy, reduces them by Gram-Schmidt (so redundant and
   conflicting rows are dropped rather than silently picking a winner), and projects the

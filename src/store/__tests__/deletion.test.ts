@@ -120,7 +120,7 @@ describe('deleteEdge', () => {
   });
 });
 
-describe('vertices kept for redrawing survive a tool switch', () => {
+describe('nothing drawn is ever swept away', () => {
   beforeEach(() => state().loadDesign(seedModel()));
 
   it('does not sweep away corners left behind by deleteEdge', () => {
@@ -134,7 +134,7 @@ describe('vertices kept for redrawing survive a tool switch', () => {
     expect(state().design.vertices.length).toBe(kept);
   });
 
-  it('still discards the points an abandoned draft created', () => {
+  it('keeps what a chain drew when the chain is stopped', () => {
     state().setBuildTool('draw');
     state().startDrawingAt('b0', {
       origin: { x: 0, y: 0, z: 0 },
@@ -146,7 +146,9 @@ describe('vertices kept for redrawing survive a tool switch', () => {
     state().commitPendingPoint();
     const during = state().design.vertices.length;
 
-    state().cancelDraft();
-    expect(state().design.vertices.length).toBe(during - 1);
+    // Every segment is committed as it's drawn, so stopping is not abandoning: the whole
+    // point is that a defining edge can be drawn and left standing.
+    state().endChain();
+    expect(state().design.vertices.length).toBe(during);
   });
 });
