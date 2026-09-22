@@ -10,6 +10,7 @@ import { edgeKey } from '../../geometry/types';
 import { faceLocalBasis, fromFaceLocal, toFaceLocal } from '../../geometry/basis';
 import { verticalPlaneFacingCamera } from '../../geometry/drawPlane';
 import { fanTriangulatePositions, toArray } from './threeHelpers';
+import { installDragGuard, pointerDragged } from './dragGuard';
 import { V } from '../../geometry/vec3';
 
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
@@ -36,6 +37,7 @@ function SketchPreview() {
 
   const onPlaneClick = (e: ThreeEvent<MouseEvent>) => {
     if (mode !== 'sketch') return;
+    if (pointerDragged(e)) return; // the camera was being orbited, not a point placed
     e.stopPropagation();
     const point = new THREE.Vector3();
     e.ray.intersectPlane(plane, point);
@@ -206,6 +208,7 @@ function DrawSurface() {
         userData={{ isDrawSurface: true }}
         onPointerMove={(e) => setDrawCursor({ x: e.point.x, y: e.point.y, z: e.point.z })}
         onClick={(e) => {
+          if (pointerDragged(e)) return; // an orbit ends over this sheet; that is not a click
           if (clickBelongsToGeometry(e)) return;
           e.stopPropagation();
           setDrawCursor({ x: e.point.x, y: e.point.y, z: e.point.z });
@@ -241,6 +244,7 @@ function ChainStartSurface() {
     <mesh
       visible={false}
       onClick={(e) => {
+        if (pointerDragged(e)) return; // an orbit that happened to end here
         // Existing geometry under the pointer has its own handlers and wins.
         if (e.intersections.some((i) => i.object.userData?.isVertexHandle || i.object.userData?.isEdgeHandle)) {
           return;
@@ -554,6 +558,7 @@ function VertexHandle({ id, position, locked }: { id: string; position: Vec3; lo
   const movable = mode === 'build' && buildTool === 'move' && !locked;
 
   const onClick = (e: ThreeEvent<MouseEvent>) => {
+    if (pointerDragged(e)) return; // released here after orbiting, not clicked here
     e.stopPropagation();
     if (mode === 'build' && buildTool === 'draw') {
       if (draftVertexIds.length === 0) {
@@ -649,6 +654,9 @@ function FaceMesh({ face }: { face: Face }) {
   else if (hovered) color = '#6b7280';
 
   const onClick = (e: ThreeEvent<MouseEvent>) => {
+    // A face is the broadest target in the scene, so an orbit almost always ends on one —
+    // which would otherwise drop a T-nut hole or change the selection.
+    if (pointerDragged(e)) return;
     e.stopPropagation();
     if (mode === 'angles') {
       if (!selectedFaceId) {
@@ -754,6 +762,7 @@ function EdgeLine({ a, b, standalone }: { a: string; b: string; standalone?: boo
           )}
           visible={false}
           onClick={(e) => {
+            if (pointerDragged(e)) return; // an orbit that ended over this edge
             if (drawable) {
               // Landing "near" an edge isn't good enough — a point a hundredth of an inch
               // off the line is a different and worse thing than one on it. The edge is
@@ -999,6 +1008,7 @@ export function Viewport() {
   const draggingVertexId = useDesignStore((s) => s.draggingVertexId);
   const draggingEdge = useDesignStore((s) => s.draggingEdge);
   useViewportKeyboard();
+  useEffect(installDragGuard, []);
 
   return (
     <div

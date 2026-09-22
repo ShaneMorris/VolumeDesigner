@@ -137,6 +137,21 @@ The toolbar's five modes match the spec's workflow:
 An always-visible sidebar table lists every edge length and every dihedral angle in
 the current solid.
 
+## Mouse
+
+Left-drag orbits, right-drag pans, the wheel zooms — three.js `OrbitControls` defaults.
+
+Left-click is also how every tool acts, which used to mean that orbiting ended in a click:
+React Three Fiber decides whether to fire `onClick` by asking whether pointer-down and
+pointer-up hit the *same object*, never whether the pointer moved. (It does have a 2px
+threshold, but only for clicks that hit nothing at all.) So a camera sweep that began and
+ended over the same face placed a point in Draw, and would have dropped a T-nut in Holes.
+
+`viewport/dragGuard.ts` fixes that: the pointer's press position is recorded in the capture
+phase, and every handler that *does* something on click ignores the event if the pointer
+travelled more than a few pixels. A wobble is still a click; a sweep across the viewport is
+not.
+
 ## Architecture
 
 - `src/geometry/` — the core engine, framework-free and unit-tested (`vitest`):
