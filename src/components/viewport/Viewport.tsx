@@ -204,7 +204,7 @@ function RubberBandSegment() {
 function VertexDragHandler() {
   const { camera, gl } = useThree();
   const draggingVertexId = useDesignStore((s) => s.draggingVertexId);
-  const setDraggingVertexId = useDesignStore((s) => s.setDraggingVertexId);
+  const endDrag = useDesignStore((s) => s.endDrag);
 
   useEffect(() => {
     if (!draggingVertexId) return;
@@ -245,12 +245,9 @@ function VertexDragHandler() {
       }
     };
 
-    const onUp = () => {
-      // Re-commit the final position so the whole drag lands as one undo step.
-      const current = useDesignStore.getState().design.vertices.find((v) => v.id === draggingVertexId);
-      if (current) useDesignStore.getState().moveVertex(draggingVertexId, current.position, { commit: true });
-      setDraggingVertexId(null);
-    };
+    // The whole drag is one undo step, recorded from where it started rather than from
+    // the position it ended at.
+    const onUp = () => endDrag();
 
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
@@ -258,7 +255,79 @@ function VertexDragHandler() {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
-  }, [draggingVertexId, camera, gl, setDraggingVertexId]);
+  }, [draggingVertexId, camera, gl, endDrag]);
+
+  return null;
+}
+
+/**
+ * Click-drag movement for a whole edge: both ends travel together, so the edge keeps its
+ * length and direction and only the translation is up for negotiation. Same pointer
+ * conventions as a vertex drag — horizontal by default, vertical while Shift is held —
+ * measured from the edge's midpoint, which is where it was grabbed.
+ */
+function EdgeDragHandler() {
+  const { camera, gl } = useThree();
+  const draggingEdge = useDesignStore((s) => s.draggingEdge);
+  const endDrag = useDesignStore((s) => s.endDrag);
+
+  useEffect(() => {
+    if (!draggingEdge) return;
+    const { a, b } = draggingEdge;
+    const verts = useDesignStore.getState().design.vertices;
+    const pa = verts.find((v) => v.id === a)?.position;
+    const pb = verts.find((v) => v.id === b)?.position;
+    if (!pa || !pb) return;
+
+    const origin = new THREE.Vector3((pa.x + pb.x) / 2, (pa.y + pb.y) / 2, (pa.z + pb.z) / 2);
+    const canvas = gl.domElement;
+    const raycaster = new THREE.Raycaster();
+    const ndc = new THREE.Vector2();
+    const horizontalPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -origin.z);
+    const hit = new THREE.Vector3();
+    // Measured against where the edge sits right now, so each move is a delta rather than
+    // an absolute — the store has already refused or redirected everything before it.
+    const midpointNow = () => {
+      const current = useDesignStore.getState().design.vertices;
+      const ca = current.find((v) => v.id === a)!.position;
+      const cb = current.find((v) => v.id === b)!.position;
+      return new THREE.Vector3((ca.x + cb.x) / 2, (ca.y + cb.y) / 2, (ca.z + cb.z) / 2);
+    };
+
+    const onMove = (ev: PointerEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      ndc.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+      ndc.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(ndc, camera);
+      const ray = raycaster.ray;
+      const from = midpointNow();
+
+      if (ev.shiftKey) {
+        const w0 = new THREE.Vector3().subVectors(origin, ray.origin);
+        const d = ray.direction.z;
+        const denom = 1 - d * d;
+        if (Math.abs(denom) < 1e-6) return;
+        const sc = (d * ray.direction.dot(w0) - w0.z) / denom;
+        const targetZ = origin.z + sc;
+        useDesignStore.getState().moveEdgeBy(a, b, { x: 0, y: 0, z: targetZ - from.z }, { commit: false });
+        return;
+      }
+
+      if (ray.intersectPlane(horizontalPlane, hit)) {
+        useDesignStore
+          .getState()
+          .moveEdgeBy(a, b, { x: hit.x - from.x, y: hit.y - from.y, z: 0 }, { commit: false });
+      }
+    };
+
+    const onUp = () => endDrag();
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+  }, [draggingEdge, camera, gl, endDrag]);
 
   return null;
 }
@@ -291,7 +360,7 @@ function VertexHandle({ id, position, locked }: { id: string; position: Vec3; lo
   const startDrawingAt = useDesignStore((s) => s.startDrawingAt);
   const addDraftVertexById = useDesignStore((s) => s.addDraftVertexById);
   const closeDraftFace = useDesignStore((s) => s.closeDraftFace);
-  const setDraggingVertexId = useDesignStore((s) => s.setDraggingVertexId);
+  const beginVertexDrag = useDesignStore((s) => s.beginVertexDrag);
 
   const baseRadius = useHandleRadius();
   const { camera } = useThree();
@@ -332,7 +401,7 @@ function VertexHandle({ id, position, locked }: { id: string; position: Vec3; lo
     if (!movable) return;
     e.stopPropagation();
     selectVertex(id);
-    setDraggingVertexId(id);
+    beginVertexDrag(id);
   };
 
   const color = isDragging
@@ -450,11 +519,16 @@ function FaceEdges({ face }: { face: Face }) {
   const selectedEdge = useDesignStore((s) => s.selectedEdge);
   const selectedEdgePair = useDesignStore((s) => s.selectedEdgePair);
   const selectEdgePair = useDesignStore((s) => s.selectEdgePair);
+  const beginEdgeDrag = useDesignStore((s) => s.beginEdgeDrag);
+  const draggingEdge = useDesignStore((s) => s.draggingEdge);
   const handleRadius = useHandleRadius();
   const positions = facePositions(design, face);
   const points = [...positions, positions[0]].map((p) => new THREE.Vector3(p.x, p.y, p.z));
 
-  const pickable = mode === 'build' && buildTool === 'select';
+  // Edges answer to the pointer in both tools: Select picks them, Move drags them whole.
+  const selectable = mode === 'build' && buildTool === 'select';
+  const draggable = mode === 'build' && buildTool === 'move';
+  const pickable = selectable || draggable;
   const n = face.vertexIds.length;
 
   return (
@@ -465,13 +539,14 @@ function FaceEdges({ face }: { face: Face }) {
         const matches = (edge: { a: string; b: string } | null) =>
           !!edge && ((edge.a === a && edge.b === b) || (edge.a === b && edge.b === a));
         const isSelected = matches(selectedEdge) || matches(selectedEdgePair);
+        const isDragging = matches(draggingEdge);
 
         return (
           <group key={i}>
             <Line
               points={[points[i], points[i + 1]]}
-              color={isSelected ? '#facc15' : '#1e293b'}
-              lineWidth={isSelected ? 3 : 1}
+              color={isDragging ? '#fbbf24' : isSelected ? '#facc15' : draggable ? '#3b4a63' : '#1e293b'}
+              lineWidth={isDragging || isSelected ? 3 : draggable ? 2 : 1}
             />
             {/* A line is a hairline to the raycaster, so picking rides on an invisible
                 cylinder around it — thick enough to hit without hunting for the pixel. */}
@@ -484,9 +559,17 @@ function FaceEdges({ face }: { face: Face }) {
                 )}
                 visible={false}
                 onClick={(e) => {
+                  if (!selectable) return;
                   e.stopPropagation();
                   selectEdgePair({ a, b });
                 }}
+                onPointerDown={(e) => {
+                  if (!draggable) return;
+                  e.stopPropagation();
+                  selectEdgePair({ a, b });
+                  beginEdgeDrag(a, b);
+                }}
+                userData={{ isEdgeHandle: true }}
               >
                 <cylinderGeometry
                   args={[handleRadius * 0.7, handleRadius * 0.7, points[i].distanceTo(points[i + 1]), 6]}
@@ -545,6 +628,7 @@ function SceneContent() {
       <directionalLight position={[5, 5, 8]} intensity={0.8} />
       <GroundGrid />
       <VertexDragHandler />
+      <EdgeDragHandler />
       {mode === 'sketch' && <SketchPreview />}
       {drawing && <DrawSurface />}
       {drawing && <RubberBandSegment />}
@@ -669,6 +753,7 @@ export function Viewport() {
   const buildTool = useDesignStore((s) => s.buildTool);
   const cancelDraft = useDesignStore((s) => s.cancelDraft);
   const draggingVertexId = useDesignStore((s) => s.draggingVertexId);
+  const draggingEdge = useDesignStore((s) => s.draggingEdge);
   useViewportKeyboard();
 
   return (
@@ -687,7 +772,7 @@ export function Viewport() {
       >
         <CameraRig />
         {/* Orbiting has to stand down mid-drag, or the camera moves with the vertex. */}
-        <OrbitControls makeDefault enabled={!draggingVertexId} />
+        <OrbitControls makeDefault enabled={!draggingVertexId && !draggingEdge} />
         <SceneContent />
       </Canvas>
     </div>

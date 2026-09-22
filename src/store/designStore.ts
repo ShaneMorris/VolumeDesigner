@@ -10,8 +10,11 @@ import { setEdgeLengthByMovingVertex, setInteriorAngleAtVertex, extrudeFace } fr
 import { solveDihedralAngle } from '../geometry/solver';
 import { reapplyAngleLocks } from '../geometry/relax';
 import { regularPolygonPoints } from '../geometry/polygons';
+import { V } from '../geometry/vec3';
 import { planeThroughPoints, resolveNextPoint, type DrawPlane } from '../geometry/drawPlane';
 import { keepFacesPlanar } from '../geometry/planarize';
+import { constrainTranslation, constrainVertexMove, freedomForTranslation } from '../geometry/constrain';
+import type { Freedom } from '../geometry/constrain';
 import { loadDefaultBasePlaneSize } from '../persistence/storage';
 
 export type Mode = 'sketch' | 'build' | 'angles' | 'holes' | 'unfold';
@@ -65,10 +68,25 @@ interface DesignStoreState {
   buildTool: BuildTool;
   /** Vertex currently being click-dragged with the Move tool, if any. */
   draggingVertexId: string | null;
+  /** Edge currently being click-dragged by its middle, if any. */
+  draggingEdge: { a: string; b: string } | null;
+  /**
+   * The design as it stood when the current drag began.
+   *
+   * A drag updates the model live without committing, so undo has to be given the state
+   * from *before* the drag. Re-committing the final position instead pushes the dragged
+   * state onto the history as its own predecessor, which costs an undo step and loses the
+   * original outright.
+   */
+  dragStartDesign: Design | null;
+  /**
+   * What the current selection or drag is free to do, and whether the last move was cut
+   * short. Constraint 9 refuses moves outright, so the app has to be able to say why.
+   */
+  moveFreedom: Freedom | null;
+  moveWasLimited: boolean;
   /** Bumped to ask the viewport to re-frame the camera around the model. */
   frameNonce: number;
-  /** Whether moving a corner auto-adjusts a quad's opposite corner to keep it flat. */
-  keepFacesFlat: boolean;
   /** What validation found in the design as loaded, and what had to be repaired to open it. */
   designIssues: DesignIssue[];
   designRepairs: string[];
@@ -106,11 +124,17 @@ interface DesignStoreState {
   setLockedAngle: (angleDeg: number | null) => void;
   commitPendingPoint: () => void;
   setBuildTool: (tool: BuildTool) => void;
-  setDraggingVertexId: (id: string | null) => void;
   frameView: () => void;
-  setKeepFacesFlat: (keep: boolean) => void;
 
   moveVertex: (id: string, position: Vec3, opts?: { commit?: boolean }) => void;
+  /** Translate a whole edge, moving both ends together. */
+  moveEdgeBy: (a: string, b: string, translation: Vec3, opts?: { commit?: boolean }) => void;
+  beginVertexDrag: (id: string) => void;
+  beginEdgeDrag: (a: string, b: string) => void;
+  /** Ends a drag and records it as a single undo step, from where it started. */
+  endDrag: () => void;
+  /** Recompute what the current selection could do, without moving anything. */
+  refreshMoveFreedom: (ids: string[] | null) => void;
   setVertexLocked: (id: string, locked: boolean) => void;
   setVerticesLocked: (ids: string[], locked: boolean) => void;
 
@@ -243,8 +267,11 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
   draftCreatedVertexIds: [],
   buildTool: 'select',
   draggingVertexId: null,
+  draggingEdge: null,
+  dragStartDesign: null,
+  moveFreedom: null,
+  moveWasLimited: false,
   frameNonce: 0,
-  keepFacesFlat: true,
 
   past: [],
   future: [],
@@ -359,11 +386,8 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
           },
     ),
 
-  setDraggingVertexId: (id) => set({ draggingVertexId: id }),
-
   frameView: () => set((s) => ({ frameNonce: s.frameNonce + 1 })),
 
-  setKeepFacesFlat: (keep) => set({ keepFacesFlat: keep }),
 
   addDraftVertexById: (vertexId) =>
     set((s) => {
@@ -413,23 +437,90 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
       return commit(s, withFaceEdges(extruded));
     }),
 
+  /**
+   * Moves a vertex as far toward `position` as constraint 9 permits.
+   *
+   * The drag is projected onto the motion every affected face allows, so faces are never
+   * warped and then corrected — nothing the user didn't grab ever moves. A fully pinned
+   * vertex simply doesn't budge, and `moveFreedom` carries the reason to the panel.
+   */
   moveVertex: (id, position, opts) =>
     set((s) => {
       const target = s.design.vertices.find((v) => v.id === id);
-      if (!target || target.locked) return {};
-      const movedDesign: Design = {
+      if (!target) return {};
+      const move = constrainVertexMove(s.design, id, position);
+      const shared = { moveFreedom: move.freedom, moveWasLimited: move.limitedByValidity };
+      if (V.length(move.translation) === 0) return shared;
+
+      const moved: Design = {
         ...s.design,
-        vertices: s.design.vertices.map((v) => (v.id === id ? { ...v, position } : v)),
+        vertices: s.design.vertices.map((v) =>
+          v.id === id ? { ...v, position: V.add(v.position, move.translation) } : v,
+        ),
       };
-      const flattened = s.keepFacesFlat ? keepFacesPlanar(movedDesign, id) : movedDesign;
-      // Angle locks run last: the spec is explicit that a locked angle is never
-      // silently broken, so it outranks the flatness correction when they disagree.
-      const relaxed = reapplyAngleLocks(flattened);
-      if (opts?.commit) {
-        return commit(s, relaxed);
-      }
-      return { design: relaxed };
+      // Angle locks run last: the spec is explicit that a locked angle is never silently
+      // broken, so it outranks everything else when they disagree.
+      const relaxed = reapplyAngleLocks(moved);
+      return opts?.commit ? { ...commit(s, relaxed), ...shared } : { design: relaxed, ...shared };
     }),
+
+  /**
+   * Translates a whole edge, both ends together.
+   *
+   * Deliberately not two vertex moves: because the ends travel together the edge keeps its
+   * length and direction, and a face holding both of them gives up one degree of freedom
+   * instead of two. That is why an edge often moves where neither end could alone.
+   */
+  moveEdgeBy: (a, b, translation, opts) =>
+    set((s) => {
+      const move = constrainTranslation(s.design, [a, b], translation);
+      const shared = { moveFreedom: move.freedom, moveWasLimited: move.limitedByValidity };
+      if (V.length(move.translation) === 0) return shared;
+
+      const moving = new Set([a, b]);
+      const moved: Design = {
+        ...s.design,
+        vertices: s.design.vertices.map((v) =>
+          moving.has(v.id) ? { ...v, position: V.add(v.position, move.translation) } : v,
+        ),
+      };
+      const relaxed = reapplyAngleLocks(moved);
+      return opts?.commit ? { ...commit(s, relaxed), ...shared } : { design: relaxed, ...shared };
+    }),
+
+  beginVertexDrag: (id) =>
+    set((s) => ({
+      draggingVertexId: id,
+      dragStartDesign: s.design,
+      moveFreedom: freedomForTranslation(s.design, [id]),
+      moveWasLimited: false,
+    })),
+
+  beginEdgeDrag: (a, b) =>
+    set((s) => ({
+      draggingEdge: { a, b },
+      dragStartDesign: s.design,
+      moveFreedom: freedomForTranslation(s.design, [a, b]),
+      moveWasLimited: false,
+    })),
+
+  endDrag: () =>
+    set((s) => {
+      const start = s.dragStartDesign;
+      const moved = !!start && start !== s.design;
+      return {
+        draggingVertexId: null,
+        draggingEdge: null,
+        dragStartDesign: null,
+        ...(moved ? { past: [...s.past, { design: start! }].slice(-100), future: [] } : {}),
+      };
+    }),
+
+  refreshMoveFreedom: (ids) =>
+    set((s) => ({
+      moveFreedom: ids && ids.length > 0 ? freedomForTranslation(s.design, ids) : null,
+      moveWasLimited: false,
+    })),
 
   setVertexLocked: (id, locked) =>
     set((s) =>
@@ -448,12 +539,27 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
       });
     }),
 
+  /**
+   * Typing an exact edge length still moves a vertex, so it answers to constraint 9 like any
+   * other move: the target is worked out first, then constrained. On a pinned vertex the
+   * typed value simply can't be honoured, and `moveFreedom` says what is holding it rather
+   * than the number silently not taking.
+   */
   setEdgeLength: (anchorVertexId, movingVertexId, lengthIn) =>
     set((s) => {
-      const moved = setEdgeLengthByMovingVertex(s.design, anchorVertexId, movingVertexId, lengthIn);
-      const flattened = s.keepFacesFlat ? keepFacesPlanar(moved, movingVertexId) : moved;
-      const relaxed = reapplyAngleLocks(flattened);
-      return commit(s, relaxed);
+      const target = setEdgeLengthByMovingVertex(s.design, anchorVertexId, movingVertexId, lengthIn);
+      const wanted = target.vertices.find((v) => v.id === movingVertexId);
+      if (!wanted) return {};
+      const move = constrainVertexMove(s.design, movingVertexId, wanted.position);
+      const shared = { moveFreedom: move.freedom, moveWasLimited: move.limitedByValidity };
+      if (V.length(move.translation) === 0) return shared;
+      const moved: Design = {
+        ...s.design,
+        vertices: s.design.vertices.map((v) =>
+          v.id === movingVertexId ? { ...v, position: V.add(v.position, move.translation) } : v,
+        ),
+      };
+      return { ...commit(s, reapplyAngleLocks(moved)), ...shared };
     }),
 
   setInteriorAngle: (faceId, vertexId, angleDeg) =>

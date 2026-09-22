@@ -128,11 +128,18 @@ of the system, and project the pointer's motion into it. Freedom is `3 − rank`
 makes a boundary cross itself. The user sees both as "it won't go there", but they are separate
 mechanisms and the UI should say which is acting.
 
-*Honest consequence.* A closed box of planar quads is rigid: nothing can move without breaking
-planarity, and constrained dragging will correctly refuse every vertex. This is not a bug, and
-the app must **say why** rather than silently ignoring the drag — "pinned by 3 planar faces" is
-the difference between a constraint and a broken tool. The remedy is to split a face (below),
-which adds the freedom back.
+*Honest consequence.* On a closed box of planar quads, every **corner** is pinned: three
+quads meet there, their planes intersect at a single point, and constrained dragging will
+correctly refuse to move it. This is not a bug, and the app must **say why** rather than
+silently ignoring the drag — "pinned by Base, Front, Left" is the difference between a
+constraint and a broken tool. The remedy is to split a face (below), which adds freedom back.
+
+The same box's **edges**, though, are not stuck: each one keeps two directions. The two faces
+meeting along an edge of a box are parallelograms, so sliding that edge merely tilts them and
+they stay flat; only the faces at either end object, and they both object to the same thing.
+So a box shears where it cannot be dented. This is the sharpest illustration of why edge
+dragging is its own operation rather than a shortcut for moving two vertices: the two have
+genuinely different constraint sets, and the edge is often the freer of them.
 
 **Editing operations**
 

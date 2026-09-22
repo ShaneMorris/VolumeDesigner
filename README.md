@@ -10,9 +10,13 @@ implements.
 ```bash
 npm install
 npm run dev      # local dev server
-npm run build    # production build (tsc + vite build)
+npm run build    # production build — and the real typecheck (tsc -b, then vite build)
 npx vitest run    # geometry engine test suite
 ```
+
+Note that `tsc --noEmit` checks **nothing** in this project: the root `tsconfig.json` is a
+solution file (`"files": []` plus `references`), so type errors only surface through
+`tsc -b`, which is what `npm run build` runs.
 
 Everything runs client-side — there's no backend. A design autosaves to the browser's
 `localStorage` as you work, and "Save JSON" / "Open JSON" export/import a design file
@@ -48,18 +52,29 @@ The toolbar's five modes match the spec's workflow:
      planarity has pinned — though a neighbouring face usually needs the same treatment
      before it can actually move. The base can't be split, and a chord that would pass
      outside a concave face, or cross one of its edges, is refused with the reason.
-   - **Move** — click and drag a vertex to reshape every face touching it, live.
-     Dragging slides it horizontally; hold Shift to move it straight up/down. Locked
-     vertices don't budge.
+   - **Move** — drag a vertex, or grab an edge to move the whole edge. Dragging slides
+     horizontally; hold Shift to move straight up/down. Locked vertices don't budge.
 
-     "Keep faces flat" (on by default) stops a drag from warping faces. Four corners
-     don't generally share a plane, so moving one warps every face it belongs to — a
-     crease along the renderer's triangulation diagonal, and a panel the unfolder has to
-     approximate. The model is relaxed instead: each warped face's free corners are
-     projected onto its best-fit plane, repeatedly, until everything settles. Correcting
-     only the dragged corner's own faces isn't enough — whichever corner absorbs the fix
-     belongs to further faces that then warp in turn, the base among them. The dragged
-     corner, locked corners, and the base face are all held fixed throughout.
+     Faces stay flat because the **drag is constrained**, not because anything is corrected
+     afterward. Every move is a translation of some set of vertices; each face it would warp
+     contributes one linear equation, and the move is projected onto whatever motion
+     satisfies all of them. So nothing you didn't grab ever moves — which was the problem
+     with the relaxation this replaced.
+
+     That means a point sometimes won't go where the pointer does, and sometimes won't move
+     at all. On a closed box every corner is pinned: three quads meet there and their planes
+     intersect at a point. The panel always says what's holding it ("pinned by Base, Side 1,
+     Side 4"), because a silent refusal is indistinguishable from a broken tool. Splitting
+     one of those faces is the remedy.
+
+     **Dragging an edge is its own operation**, not a shortcut for moving two vertices. Since
+     both ends travel together the edge keeps its length and direction, so a face holding
+     both of them gives up one degree of freedom instead of two. A box's edges therefore
+     still slide even though its corners are stuck — it shears where it can't be dented.
+
+     Two separate limits are at work and the panel distinguishes them: planarity decides
+     *which way* a move can go, while the area and self-intersection rules decide *how far*,
+     stopping a drag before a face becomes a sliver or folds over itself.
    - **Draw** — click an existing point to start a face; a line then follows the cursor.
      Click to place each next point, click the first point again (3+ points) to close
      the face, Esc to cancel. While a segment is live, a sidebar dialog reads out its
@@ -104,6 +119,11 @@ the current solid.
   identified by its endpoint pair rather than an id of its own, so "the same edge twice" is
   unrepresentable. `edges.ts` keeps the edge set and the face loops in step — anything that
   creates a face runs `withFaceEdges`, so no caller has to remember to.
+- `src/geometry/constrain.ts` — the null-space solver behind Move. Builds the linear
+  constraints a translation must satisfy, reduces them by Gram-Schmidt (so redundant and
+  conflicting rows are dropped rather than silently picking a winner), and projects the
+  requested motion onto what's left. `planarize.ts` survives only as the offered repair for
+  a design that loaded warped — it is no longer in any editing path.
 - `src/geometry/validate.ts` / `normalize.ts` — the ten constraints from the spec, checked.
   In normal use nothing fires: the editing operations are written not to break them. They
   earn their keep on the load path, where a design file is untrusted input. Structural

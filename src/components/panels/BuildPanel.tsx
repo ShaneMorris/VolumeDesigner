@@ -4,6 +4,7 @@ import { VertexInspector } from './VertexInspector';
 import { NextPointPanel } from './NextPointPanel';
 import { NumberField } from '../ui/NumberField';
 import { SplitEdgeControl, SplitFaceControl, ActionError } from './SplitControls';
+import { FreedomReadout } from './FreedomReadout';
 
 const TOOL_LABELS: Record<BuildTool, string> = {
   select: '⬚ Select',
@@ -13,7 +14,7 @@ const TOOL_LABELS: Record<BuildTool, string> = {
 
 const TOOL_HINTS: Record<BuildTool, string> = {
   select: 'Click a vertex, edge or face to select it — for the numeric inspector, locking, the pull-up shortcut, or deleting. Del removes the selection.',
-  move: 'Click and drag any vertex to move it. Dragging slides it horizontally; hold Shift while dragging to move it straight up and down. Locked vertices stay put.',
+  move: 'Drag a vertex to move it, or grab an edge to move the whole edge. Dragging slides horizontally; hold Shift to move straight up and down. Motion is limited to whatever keeps every face flat, so some points barely move and some cannot move at all — the panel says what is holding them.',
   draw: 'Click an existing point to start a face. A line then follows the cursor — click to place each next point, typing an exact length/angle first if you want. Connecting the line back to any existing point closes the face (Shift-click to route through it and keep drawing instead). Esc cancels.',
 };
 
@@ -29,8 +30,6 @@ export function BuildPanel() {
   const setVerticesLocked = useDesignStore((s) => s.setVerticesLocked);
   const buildTool = useDesignStore((s) => s.buildTool);
   const setBuildTool = useDesignStore((s) => s.setBuildTool);
-  const keepFacesFlat = useDesignStore((s) => s.keepFacesFlat);
-  const setKeepFacesFlat = useDesignStore((s) => s.setKeepFacesFlat);
   const selectedEdgePair = useDesignStore((s) => s.selectedEdgePair);
   const deleteVertex = useDesignStore((s) => s.deleteVertex);
   const deleteEdge = useDesignStore((s) => s.deleteEdge);
@@ -74,20 +73,7 @@ export function BuildPanel() {
       <p className="panel-hint">{TOOL_HINTS[buildTool]}</p>
       <ActionError />
 
-      <label className="checkbox-row">
-        <input
-          type="checkbox"
-          checked={keepFacesFlat}
-          onChange={(e) => setKeepFacesFlat(e.target.checked)}
-        />
-        Keep faces flat
-      </label>
-      <p className="panel-hint">
-        Four corners don't generally share a plane, so moving one warps every face it belongs to — which shows
-        as a crease and forces the unfolder to approximate that panel. With this on, the neighbouring corners
-        shift just enough to keep all the faces flat. The corner you're dragging, any locked corners, and the
-        base face all stay exactly put.
-      </p>
+      {buildTool === 'move' && <FreedomReadout />}
 
       {buildTool === 'draw' && (
         <>
