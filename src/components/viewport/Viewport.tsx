@@ -631,6 +631,17 @@ function VertexHandle({ id, position, locked }: { id: string; position: Vec3; lo
   );
 }
 
+
+/**
+ * Robin's egg blue, as it has to be *written* to come out looking like itself.
+ *
+ * The scene's white ambient and directional lights wash the saturation out of a standard
+ * material, so a literal swatch renders as a muted sage-teal. A little self-lit colour on
+ * top holds the hue steady whichever way a panel happens to face.
+ */
+const ROBINS_EGG_BLUE = '#5fd0d6';
+const ROBINS_EGG_GLOW = 0.3;
+
 function FaceMesh({ face }: { face: Face }) {
   const design = useDesignStore((s) => s.design);
   const mode = useDesignStore((s) => s.mode);
@@ -648,7 +659,9 @@ function FaceMesh({ face }: { face: Face }) {
   const isSelected = selectedFaceId === face.id;
   const isEdgeMember = selectedEdge && (selectedEdge.faceAId === face.id || selectedEdge.faceBId === face.id);
 
-  let color = isBase ? '#3d5a6c' : '#3d5145';
+  // Panels are robin's egg blue; the base keeps its own darker slate so the face the
+  // volume mounts on is still tellable at a glance. Selection and hover override both.
+  let color = isBase ? '#3d5a6c' : ROBINS_EGG_BLUE;
   if (isEdgeMember) color = '#8b5cf6';
   else if (isSelected) color = '#f5a623';
   else if (hovered) color = '#6b7280';
@@ -696,7 +709,12 @@ function FaceMesh({ face }: { face: Face }) {
       <bufferGeometry>
         <bufferAttribute attach="attributes-position" args={[geomPositions, 3]} />
       </bufferGeometry>
-      <meshStandardMaterial color={color} side={THREE.DoubleSide} transparent opacity={0.85} />
+      <meshStandardMaterial
+        color={color}
+        emissive={color}
+        emissiveIntensity={ROBINS_EGG_GLOW}
+        side={THREE.DoubleSide}
+      />
     </mesh>
   );
 }
