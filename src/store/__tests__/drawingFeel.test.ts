@@ -128,3 +128,40 @@ describe('a start point that never became anything does not linger', () => {
     expect(state().past.length).toBe(history);
   });
 });
+
+describe('the drawing plane is not a wall', () => {
+  beforeEach(() => {
+    state().loadDesign(seed());
+    state().setBuildTool('draw');
+    state().startDrawingAt('a', plane);
+  });
+
+  it('accepts a cursor far outside the work area instead of ignoring it', () => {
+    // The pointer sheet is deliberately much larger than the view; what bounds the result
+    // is the work area, not how big that sheet happens to be.
+    state().setDrawCursor(at(500, 0, 300));
+    const pending = resolvePendingPoint(state());
+    expect(pending).not.toBeNull();
+  });
+
+  it('holds a pointer-aimed point inside the work area', () => {
+    const half = state().design.basePlaneSizeIn / 2;
+    state().setDrawCursor(at(500, 0, 300));
+    const pending = resolvePendingPoint(state())!;
+    expect(Math.abs(pending.x)).toBeLessThanOrEqual(half + 1e-9);
+    expect(pending.z).toBeLessThanOrEqual(state().design.basePlaneSizeIn + 1e-9);
+  });
+
+  it('does not clamp below the base plane too tightly to work with', () => {
+    const half = state().design.basePlaneSizeIn / 2;
+    state().setDrawCursor(at(0, 0, -500));
+    expect(resolvePendingPoint(state())!.z).toBeCloseTo(-half, 6);
+  });
+
+  it('honours a typed value as given rather than clamping it', () => {
+    // Typing is deliberate; the clamp exists for aiming, not for overriding intent.
+    state().setLockedAngle(90);
+    state().setLockedLength(40);
+    expect(resolvePendingPoint(state())!.z).toBeCloseTo(40, 6);
+  });
+});

@@ -259,7 +259,31 @@ export function resolvePendingPoint(s: PendingPointInput): Vec3 | null {
 
   const cursor = s.drawSnap ?? s.drawCursor ?? from;
   if (!s.drawCursor && !s.drawSnap && !fullyTyped) return null;
-  return resolveNextPoint(s.drawPlane, from, cursor, { lengthIn, angleDeg: s.lockedAngleDeg });
+  const landing = resolveNextPoint(s.drawPlane, from, cursor, { lengthIn, angleDeg: s.lockedAngleDeg });
+
+  // A typed value is deliberate and is honoured as given. A point aimed with the pointer
+  // is held inside the work area, the same way sketch clicks are: the sheet the pointer
+  // is cast onto is deliberately far larger than the view, so without this a click near
+  // the horizon would land somewhere absurd.
+  return anyLock ? landing : clampToWorkArea(landing, s.design.basePlaneSizeIn);
+}
+
+/**
+ * Keeps a pointer-aimed point within reach.
+ *
+ * The footprint is the work area itself. Height is allowed up to a full work-area
+ * dimension rather than half of one, since a volume can reasonably be as tall as its base
+ * is wide, and a little below zero, since a point can legitimately sit just under the
+ * base plane while geometry is being worked out.
+ */
+function clampToWorkArea(p: Vec3, basePlaneSizeIn: number): Vec3 {
+  const half = basePlaneSizeIn / 2;
+  const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value));
+  return {
+    x: clamp(p.x, -half, half),
+    y: clamp(p.y, -half, half),
+    z: clamp(p.z, -half, basePlaneSizeIn),
+  };
 }
 
 /**

@@ -111,6 +111,17 @@ The toolbar's five modes match the spec's workflow:
      can't shift it mid-chain; once three points are down they define a plane outright and
      drawing switches onto it, which is what keeps a finished face planar and unfoldable.
 
+     The plane is never drawn. It used to be shown as a faint translucent square, which
+     read as a wall — and behaved like one, because that same square was the mesh catching
+     the pointer, so outside it no event fired and the cursor simply stopped. The sheet the
+     pointer is cast onto is now far larger than any view, and what bounds the result is the
+     work area rather than the size of a mesh. Where the point will land is shown by the
+     rubber band, the snap highlight and the numeric read-out instead.
+
+     Edges belonging to no face are drawn in their own colour, so an edge drawn deliberately
+     and left standing is visible — otherwise the one thing this tool exists for produces
+     nothing you can see.
+
    The "pull-up" shortcut extrudes the selected base face straight up by a numeric
    height — available, never automatic.
 3. **Angles** — click one face then an adjacent face to select their shared edge and

@@ -5,6 +5,8 @@ import * as THREE from 'three';
 import { useDesignStore, resolvePendingPoint } from '../../store/designStore';
 import type { Face, Vec3 } from '../../geometry/types';
 import { facePositions, findSharedEdge } from '../../geometry/mesh';
+import { faceEdgePairs } from '../../geometry/edges';
+import { edgeKey } from '../../geometry/types';
 import { faceLocalBasis, fromFaceLocal, toFaceLocal } from '../../geometry/basis';
 import { verticalPlaneFacingCamera } from '../../geometry/drawPlane';
 import { fanTriangulatePositions, toArray } from './threeHelpers';
@@ -85,9 +87,19 @@ function useHandleRadius(): number {
  * distance and dropped a point far out in space; the surface has to end somewhere the
  * user can actually see. Slightly taller than the plane so walls have headroom.
  */
+/**
+ * How big the invisible sheet that catches drawing clicks is.
+ *
+ * Generously larger than anything on screen, because a *drawing plane is infinite* — the
+ * mesh only exists to give the raycaster something to hit. Sized to the work area it
+ * behaved as a wall: outside it no pointer event fired at all, so the cursor stopped
+ * updating and clicks went nowhere, which looks exactly like being unable to draw past an
+ * invisible boundary. Where the resulting point may actually land is bounded separately,
+ * by the work area, rather than by how big this sheet happens to be.
+ */
 function useDrawSurfaceSize(): number {
   const basePlaneSizeIn = useDesignStore((s) => s.design.basePlaneSizeIn);
-  return basePlaneSizeIn * 1.5;
+  return basePlaneSizeIn * 40;
 }
 
 /** Orientation quaternion that lays a default (XY) plane onto an arbitrary normal. */
@@ -181,22 +193,30 @@ function DrawSurface() {
     );
 
   return (
-    <mesh
-      position={[drawPlane.origin.x, drawPlane.origin.y, drawPlane.origin.z]}
-      quaternion={orientation}
-      onPointerMove={(e) => setDrawCursor({ x: e.point.x, y: e.point.y, z: e.point.z })}
-      userData={{ isDrawSurface: true }}
-      onClick={(e) => {
-        if (clickBelongsToGeometry(e)) return;
-        e.stopPropagation();
-        setDrawCursor({ x: e.point.x, y: e.point.y, z: e.point.z });
-        commitPendingPoint();
-      }}
-      onPointerMissed={undefined}
-    >
-      <planeGeometry args={[size, size]} />
-      <meshBasicMaterial color="#7dd3fc" transparent opacity={0.06} side={THREE.DoubleSide} />
-    </mesh>
+    <group>
+      {/* The sheet that catches the pointer. Never drawn: a translucent fill at this size
+          would tint the whole viewport, and at any size a visible plane reads as a wall
+          rather than as the guide it is — which is exactly how the old one was read. The
+          rubber band, the snap highlight and the numeric read-out already say where the
+          point will land, without putting a surface in the way. */}
+      <mesh
+        position={[drawPlane.origin.x, drawPlane.origin.y, drawPlane.origin.z]}
+        quaternion={orientation}
+        visible={false}
+        userData={{ isDrawSurface: true }}
+        onPointerMove={(e) => setDrawCursor({ x: e.point.x, y: e.point.y, z: e.point.z })}
+        onClick={(e) => {
+          if (clickBelongsToGeometry(e)) return;
+          e.stopPropagation();
+          setDrawCursor({ x: e.point.x, y: e.point.y, z: e.point.z });
+          commitPendingPoint();
+        }}
+      >
+        <planeGeometry args={[size, size]} />
+        <meshBasicMaterial side={THREE.DoubleSide} />
+      </mesh>
+
+    </group>
   );
 }
 
@@ -673,7 +693,14 @@ function FaceMesh({ face }: { face: Face }) {
   );
 }
 
-function FaceEdges({ face }: { face: Face }) {
+/**
+ * One drawn edge, with everything the pointer can do to it.
+ *
+ * Shared by the edges of a face and by edges belonging to no face, so the two behave
+ * identically — an edge drawn and left standing is as selectable, draggable and drawable-on
+ * as one that happens to sit on a panel.
+ */
+function EdgeLine({ a, b, standalone }: { a: string; b: string; standalone?: boolean }) {
   const design = useDesignStore((s) => s.design);
   const mode = useDesignStore((s) => s.mode);
   const buildTool = useDesignStore((s) => s.buildTool);
@@ -685,8 +712,13 @@ function FaceEdges({ face }: { face: Face }) {
   const chainThroughEdge = useDesignStore((s) => s.chainThroughEdge);
   const { camera } = useThree();
   const handleRadius = useHandleRadius();
-  const positions = facePositions(design, face);
-  const points = [...positions, positions[0]].map((p) => new THREE.Vector3(p.x, p.y, p.z));
+
+  const pa = design.vertices.find((v) => v.id === a)?.position;
+  const pb = design.vertices.find((v) => v.id === b)?.position;
+  if (!pa || !pb) return null;
+
+  const start = new THREE.Vector3(pa.x, pa.y, pa.z);
+  const end = new THREE.Vector3(pb.x, pb.y, pb.z);
 
   // Edges answer to the pointer in all three tools: Select picks them, Move drags them
   // whole, Draw runs a chain onto them.
@@ -694,73 +726,101 @@ function FaceEdges({ face }: { face: Face }) {
   const draggable = mode === 'build' && buildTool === 'move';
   const drawable = mode === 'build' && buildTool === 'draw';
   const pickable = selectable || draggable || drawable;
-  const n = face.vertexIds.length;
+
+  const matches = (edge: { a: string; b: string } | null) =>
+    !!edge && ((edge.a === a && edge.b === b) || (edge.a === b && edge.b === a));
+  const isSelected = matches(selectedEdge) || matches(selectedEdgePair);
+  const isDragging = matches(draggingEdge);
+
+  // An edge on no face is drawn brighter than a panel's outline: it is scaffold the user
+  // deliberately left standing, and it is the only thing marking that geometry.
+  const restingColor = standalone ? '#7dd3fc' : draggable ? '#3b4a63' : '#1e293b';
 
   return (
     <group>
-      {Array.from({ length: n }).map((_, i) => {
-        const a = face.vertexIds[i];
-        const b = face.vertexIds[(i + 1) % n];
-        const matches = (edge: { a: string; b: string } | null) =>
-          !!edge && ((edge.a === a && edge.b === b) || (edge.a === b && edge.b === a));
-        const isSelected = matches(selectedEdge) || matches(selectedEdgePair);
-        const isDragging = matches(draggingEdge);
+      <Line
+        points={[start, end]}
+        color={isDragging ? '#fbbf24' : isSelected ? '#facc15' : restingColor}
+        lineWidth={isDragging || isSelected ? 3 : standalone ? 2 : draggable ? 2 : 1}
+      />
+      {/* A line is a hairline to the raycaster, so picking rides on an invisible cylinder
+          around it — thick enough to hit without hunting for the pixel. */}
+      {pickable && (
+        <mesh
+          position={start.clone().add(end).multiplyScalar(0.5)}
+          quaternion={new THREE.Quaternion().setFromUnitVectors(
+            new THREE.Vector3(0, 1, 0),
+            end.clone().sub(start).normalize(),
+          )}
+          visible={false}
+          onClick={(e) => {
+            if (drawable) {
+              // Landing "near" an edge isn't good enough — a point a hundredth of an inch
+              // off the line is a different and worse thing than one on it. The edge is
+              // split at the click so the point is genuinely on it.
+              e.stopPropagation();
+              chainThroughEdge(
+                a,
+                b,
+                { x: e.point.x, y: e.point.y, z: e.point.z },
+                verticalPlaneFacingCamera(
+                  { x: e.point.x, y: e.point.y, z: e.point.z },
+                  { x: camera.position.x, y: camera.position.y, z: camera.position.z },
+                ),
+              );
+              return;
+            }
+            if (!selectable) return;
+            e.stopPropagation();
+            selectEdgePair({ a, b });
+          }}
+          onPointerDown={(e) => {
+            if (!draggable) return;
+            e.stopPropagation();
+            selectEdgePair({ a, b });
+            beginEdgeDrag(a, b);
+          }}
+          userData={{ isEdgeHandle: true, edgeA: pa, edgeB: pb }}
+        >
+          <cylinderGeometry args={[handleRadius * 0.7, handleRadius * 0.7, start.distanceTo(end), 6]} />
+          <meshBasicMaterial />
+        </mesh>
+      )}
+    </group>
+  );
+}
 
-        return (
-          <group key={i}>
-            <Line
-              points={[points[i], points[i + 1]]}
-              color={isDragging ? '#fbbf24' : isSelected ? '#facc15' : draggable ? '#3b4a63' : '#1e293b'}
-              lineWidth={isDragging || isSelected ? 3 : draggable ? 2 : 1}
-            />
-            {/* A line is a hairline to the raycaster, so picking rides on an invisible
-                cylinder around it — thick enough to hit without hunting for the pixel. */}
-            {pickable && (
-              <mesh
-                position={points[i].clone().add(points[i + 1]).multiplyScalar(0.5)}
-                quaternion={new THREE.Quaternion().setFromUnitVectors(
-                  new THREE.Vector3(0, 1, 0),
-                  points[i + 1].clone().sub(points[i]).normalize(),
-                )}
-                visible={false}
-                onClick={(e) => {
-                  if (drawable) {
-                    // Landing "near" an edge isn't good enough — a point a hundredth of an
-                    // inch off the line is a different and worse thing than one on it. The
-                    // edge is split at the click so the point is genuinely on it.
-                    e.stopPropagation();
-                    chainThroughEdge(
-                      a,
-                      b,
-                      { x: e.point.x, y: e.point.y, z: e.point.z },
-                      verticalPlaneFacingCamera(
-                        { x: e.point.x, y: e.point.y, z: e.point.z },
-                        { x: camera.position.x, y: camera.position.y, z: camera.position.z },
-                      ),
-                    );
-                    return;
-                  }
-                  if (!selectable) return;
-                  e.stopPropagation();
-                  selectEdgePair({ a, b });
-                }}
-                onPointerDown={(e) => {
-                  if (!draggable) return;
-                  e.stopPropagation();
-                  selectEdgePair({ a, b });
-                  beginEdgeDrag(a, b);
-                }}
-                userData={{ isEdgeHandle: true, edgeA: positions[i], edgeB: positions[(i + 1) % n] }}
-              >
-                <cylinderGeometry
-                  args={[handleRadius * 0.7, handleRadius * 0.7, points[i].distanceTo(points[i + 1]), 6]}
-                />
-                <meshBasicMaterial />
-              </mesh>
-            )}
-          </group>
-        );
-      })}
+function FaceEdges({ face }: { face: Face }) {
+  const n = face.vertexIds.length;
+  return (
+    <group>
+      {Array.from({ length: n }).map((_, i) => (
+        <EdgeLine key={i} a={face.vertexIds[i]} b={face.vertexIds[(i + 1) % n]} />
+      ))}
+    </group>
+  );
+}
+
+/**
+ * Edges that belong to no face yet.
+ *
+ * Without this they are invisible: the face renderer only knows about panels, and the
+ * in-progress outline vanishes when the chain ends. An edge drawn deliberately and left
+ * standing would exist, be listed in the dimensions table, and show nothing at all where
+ * it runs — which makes the one thing the drawing tool is for impossible to see.
+ */
+function StandaloneEdges() {
+  const design = useDesignStore((s) => s.design);
+  const onAFace = new Set<string>();
+  for (const face of design.faces) {
+    for (const { a, b } of faceEdgePairs(face)) onAFace.add(edgeKey(a, b));
+  }
+  const loose = design.edges.filter((e) => !onAFace.has(edgeKey(e.a, e.b)));
+  return (
+    <group>
+      {loose.map((e) => (
+        <EdgeLine key={edgeKey(e.a, e.b)} a={e.a} b={e.b} standalone />
+      ))}
     </group>
   );
 }
@@ -822,6 +882,7 @@ function SceneContent() {
       {design.faces.map((f) => (
         <FaceEdges key={`edges-${f.id}`} face={f} />
       ))}
+      <StandaloneEdges />
       {design.vertices.map((v) => (
         <VertexHandle key={v.id} id={v.id} position={v.position} locked={!!v.locked} />
       ))}
