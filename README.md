@@ -155,6 +155,14 @@ the current solid.
 - `src/components/viewport/` — the Three.js/`@react-three/fiber` 3D scene.
 - `src/components/panels/` — the per-mode side panels and the always-on dimensions
   table.
+- `src/export/__tests__/dxfRoundTrip.test.ts` — parses the exported DXF back and checks it
+  measures what the model says. Every other test works on geometry in memory; this one works
+  on the bytes that leave the app, which is where the failures have actually been — the
+  import that broke wasn't wrong geometry, it was correct numbers in a notation DXF readers
+  reject. Its assertions were checked by mutation: emitting raw JS numbers, laying panels out
+  from projected rather than true lengths, and declaring millimetres in the header each make
+  the matching test fail. It cannot tell you whether the miter convention matches a real cut
+  part; that needs plywood.
 - `src/export/dxfWriter.ts` / `dxf.ts` — a small hand-written AutoCAD R12 (AC1009)
   ASCII DXF writer. Deliberately not library-generated: `dxf-writer` emits AC1021 with
   LWPOLYLINE entities and stringifies coordinates with plain JS formatting, which
