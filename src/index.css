@@ -55,7 +55,8 @@ button.danger:hover:not(:disabled) {
 }
 
 input[type='number'],
-input[type='text'] {
+input[type='text'],
+select {
   font-family: inherit;
   font-size: 13px;
   background: #1a1d24;
@@ -69,4 +70,13 @@ input[type='text'] {
 table {
   border-collapse: collapse;
   width: 100%;
+}
+
+select {
+  width: 120px;
+  cursor: pointer;
+}
+
+select option:disabled {
+  color: #6b7280;
 }

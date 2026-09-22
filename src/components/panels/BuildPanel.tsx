@@ -3,6 +3,7 @@ import { useDesignStore, type BuildTool } from '../../store/designStore';
 import { VertexInspector } from './VertexInspector';
 import { NextPointPanel } from './NextPointPanel';
 import { NumberField } from '../ui/NumberField';
+import { SplitEdgeControl, SplitFaceControl, ActionError } from './SplitControls';
 
 const TOOL_LABELS: Record<BuildTool, string> = {
   select: '⬚ Select',
@@ -71,6 +72,7 @@ export function BuildPanel() {
         ))}
       </div>
       <p className="panel-hint">{TOOL_HINTS[buildTool]}</p>
+      <ActionError />
 
       <label className="checkbox-row">
         <input
@@ -130,7 +132,8 @@ export function BuildPanel() {
       {selectedEdgePair && (
         <>
           <hr />
-          <div className="inspector-group-title">Selected edge</div>
+          <SplitEdgeControl />
+          <div className="inspector-group-title">Delete this edge</div>
           <p className="panel-hint">
             Deleting an edge removes the {facesOnSelectedEdge.length === 1 ? 'face' : 'faces'} meeting along it
             but keeps both corners, so you can redraw on the same points.
@@ -156,6 +159,8 @@ export function BuildPanel() {
         <>
           <hr />
           <div className="inspector-group-title">Selected face: {selectedFace.label}</div>
+          <SplitFaceControl />
+          <div className="inspector-group-title">Face details</div>
           <label className="number-field">
             <span className="number-field-label">Label</span>
             <input

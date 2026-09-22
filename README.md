@@ -34,10 +34,20 @@ The toolbar's five modes match the spec's workflow:
    invisible and disruptive (it used to inflate every on-screen handle).
 2. **Build Faces** — three CAD-style tools:
    - **Select** — pick a vertex, edge or face for the numeric inspector, locking, the
-     pull-up shortcut, or deleting (Del also works). Deleting a **vertex** takes every
-     face using it, since a face can't simply lose a corner; deleting an **edge** takes
+     pull-up shortcut, splitting, or deleting (Del also works). Deleting a **vertex** takes
+     every face using it, since a face can't simply lose a corner; deleting an **edge** takes
      only the faces meeting along it and leaves both corners in place, so the geometry
      can be redrawn on the same points.
+
+     **Splitting** subdivides what's already there. Splitting an *edge* drops a point along
+     it at a typed distance, and every face using that edge gains the point — otherwise the
+     face boundary would stop matching the edge set. The point lands on the line, so those
+     faces stay flat and simply gain a 180° corner. Splitting a *face* divides it along a
+     chord between two corners into two faces of any size: two quads is as ordinary as two
+     triangles. Both children are planar automatically, which is what frees a corner that
+     planarity has pinned — though a neighbouring face usually needs the same treatment
+     before it can actually move. The base can't be split, and a chord that would pass
+     outside a concave face, or cross one of its edges, is refused with the reason.
    - **Move** — click and drag a vertex to reshape every face touching it, live.
      Dragging slides it horizontally; hold Shift to move it straight up/down. Locked
      vertices don't budge.

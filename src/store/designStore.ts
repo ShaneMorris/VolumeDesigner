@@ -4,6 +4,7 @@ import { clampBasePlaneSize, createEmptyDesign, edgeKey } from '../geometry/type
 import { deriveEdges, faceEdgeKeys, findSharedEdge, getFace, isFacePlanar } from '../geometry/mesh';
 import { edgesTouchingVertex, orphanVertexIds, removeEdgeKeys, withFaceEdges } from '../geometry/edges';
 import { normalizeDesign, type RawDesign } from '../geometry/normalize';
+import { splitEdgeAt, splitFace } from '../geometry/split';
 import { validateDesign, type DesignIssue } from '../geometry/validate';
 import { setEdgeLengthByMovingVertex, setInteriorAngleAtVertex, extrudeFace } from '../geometry/edit';
 import { solveDihedralAngle } from '../geometry/solver';
@@ -71,6 +72,8 @@ interface DesignStoreState {
   /** What validation found in the design as loaded, and what had to be repaired to open it. */
   designIssues: DesignIssue[];
   designRepairs: string[];
+  /** Why the last edit was refused, in the user's terms. Cleared by the next successful one. */
+  actionError: string | null;
 
   // Undo/redo
   past: HistoryEntry[];
@@ -129,6 +132,12 @@ interface DesignStoreState {
   deleteFace: (id: string) => void;
   deleteVertex: (id: string) => void;
   deleteEdge: (aVertexId: string, bVertexId: string) => void;
+
+  /** Insert a vertex along an edge, at a fraction from `a` toward `b`. */
+  splitEdge: (aVertexId: string, bVertexId: string, t: number) => void;
+  /** Divide a face along a chord between two of its corners. */
+  splitFaceByCorners: (faceId: string, m: string, n: string) => void;
+  clearActionError: () => void;
 
   undo: () => void;
   redo: () => void;
@@ -241,6 +250,7 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
   future: [],
   designIssues: [],
   designRepairs: [],
+  actionError: null,
 
   setMode: (mode) => set({ mode }),
 
@@ -557,6 +567,38 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
       };
     }),
 
+  /**
+   * Both splits refuse rather than approximate: a split that would pass outside a concave
+   * face, or cross one of its edges, is a request the geometry can't honour, and quietly
+   * doing something adjacent would be worse than saying so.
+   */
+  splitEdge: (aVertexId, bVertexId, t) =>
+    set((s) => {
+      const result = splitEdgeAt(s.design, aVertexId, bVertexId, t, () => makeId('v'));
+      if (!result.ok) return { actionError: result.reason };
+      return {
+        ...commit(s, result.design),
+        actionError: null,
+        selectedVertexId: result.vertexId,
+        selectedEdgePair: null,
+      };
+    }),
+
+  splitFaceByCorners: (faceId, m, n) =>
+    set((s) => {
+      const result = splitFace(s.design, faceId, m, n, () => makeId('f'));
+      if (!result.ok) return { actionError: result.reason };
+      return {
+        ...commit(s, result.design),
+        actionError: null,
+        selectedFaceId: result.faceIds[0],
+        selectedVertexId: null,
+        selectedEdgePair: null,
+      };
+    }),
+
+  clearActionError: () => set({ actionError: null }),
+
   undo: () =>
     set((s) => {
       if (s.past.length === 0) return {};
@@ -592,6 +634,7 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
         design: normalized,
         designIssues: issues,
         designRepairs: repairs,
+        actionError: null,
         past: [],
         future: [],
         ...CLEARED_DRAW_STATE,
@@ -607,6 +650,7 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
       future: [],
       designIssues: [],
       designRepairs: [],
+      actionError: null,
       ...CLEARED_DRAW_STATE,
       openSketch: [],
     }),
