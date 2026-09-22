@@ -2,7 +2,7 @@ import type { Design, Face } from './types';
 import { edgeKey } from './types';
 import { V, polygonNormal, polygonCentroid } from './vec3';
 import { getVertex } from './mesh';
-import { faceEdgePairs } from './edges';
+import { faceEdgePairs, facesOnEdge } from './edges';
 import { effectiveWidthIn, MIN_FACE_WIDTH_IN } from './validate';
 import { splitFace } from './split';
 
@@ -17,8 +17,11 @@ import { splitFace } from './split';
  * only the halves are faces. Preferring the shortest and rejecting any loop with a chord
  * across it picks them out.
  *
- * When more than one smallest loop qualifies the result is genuinely ambiguous, and nothing
- * is created: the edges stay, and the user says what they meant.
+ * An edge can close *two* loops at once, and both of them are real: the last edge of a
+ * tetrahedron does exactly that, with a triangle either side of it. Constraint 10 already
+ * caps an edge at two faces, so two is the most that can ever be right and is never a
+ * guess. Only more than there is room for is genuinely ambiguous — a fin of three faces
+ * meeting along one edge — and then nothing is created and the user says what they meant.
  */
 
 /** How far off a shared plane a loop's corners may sit and still count as coplanar. */
@@ -90,14 +93,14 @@ function wouldOverfillAnEdge(design: Design, loop: string[]): boolean {
 }
 
 /**
- * The loop a new edge `a`-`b` closed, if exactly one qualifies.
+ * Every smallest loop the new edge `a`-`b` closed — none, one, or several.
  *
- * Returns null when the edge closed nothing, or when several equally small loops did — an
- * ambiguity the app refuses to guess at.
+ * All of them at the same depth, since a loop one step longer is a different and larger
+ * thing rather than an alternative reading of the same one.
  */
-export function loopClosedByEdge(design: Design, a: string, b: string): string[] | null {
+export function loopsClosedByEdge(design: Design, a: string, b: string): string[][] {
   const neighbours = adjacency(design);
-  if (!neighbours.has(a) || !neighbours.has(b)) return null;
+  if (!neighbours.has(a) || !neighbours.has(b)) return [];
 
   const direct = edgeKey(a, b);
   const known = existingLoops(design.faces);
@@ -134,13 +137,10 @@ export function loopClosedByEdge(design: Design, a: string, b: string): string[]
         !wouldOverfillAnEdge(design, loop),
     );
 
-    // Distinct loops of the same length arriving together means the edge closed more than
-    // one thing at once. Picking either would be a guess, so pick neither.
     const distinct = qualifying.filter(
       (loop, i) => !qualifying.some((other, j) => j < i && sameLoop(other, loop)),
     );
-    if (distinct.length === 1) return distinct[0];
-    if (distinct.length > 1) return null;
+    if (distinct.length > 0) return distinct;
 
     frontier = next.filter((path) => {
       const tip = path[path.length - 1];
@@ -151,7 +151,7 @@ export function loopClosedByEdge(design: Design, a: string, b: string): string[]
     if (frontier.length === 0) break;
   }
 
-  return null;
+  return [];
 }
 
 /**
@@ -189,13 +189,29 @@ export function faceFromNewEdge(
     return { design, created: [] }; // already neighbours: the edge was there all along
   }
 
-  const loop = loopClosedByEdge(design, a, b);
-  if (!loop) return { design, created: [] };
+  // Take one loop at a time and look again, so each search runs against the design as it
+  // now stands: the face just made is a known one and won't be re-found, and constraint 10
+  // stops a third from ever attaching to this edge.
+  let current = design;
+  const created: string[] = [];
 
-  const id = makeId();
-  const label = `Side ${design.faces.length + 1}`;
-  return {
-    design: { ...design, faces: [...design.faces, { id, vertexIds: loop, label }] },
-    created: [id],
-  };
+  while (created.length < 2) {
+    const room = 2 - facesOnEdge(current, a, b).length;
+    if (room <= 0) break;
+
+    const loops = loopsClosedByEdge(current, a, b);
+    if (loops.length === 0) break;
+    // More loops than the edge can carry is the one genuinely ambiguous case — a fin of
+    // three faces along one edge. Which two would be a guess, so make none of them.
+    if (loops.length > room) break;
+
+    const id = makeId();
+    current = {
+      ...current,
+      faces: [...current.faces, { id, vertexIds: loops[0], label: `Side ${current.faces.length + 1}` }],
+    };
+    created.push(id);
+  }
+
+  return { design: current, created };
 }

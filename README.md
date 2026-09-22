@@ -155,11 +155,15 @@ the current solid.
   creates a face runs `withFaceEdges`, so no caller has to remember to.
 - `src/geometry/loops.ts` — what a newly drawn edge brings into being. An edge between two
   corners of an existing face **divides** it, and goes to `splitFace` so the parent's label,
-  holes and angle locks are handed on deliberately. Otherwise the edge may have **closed** a
-  loop, found by breadth-first search for the smallest one through it that is coplanar,
-  encloses real area, has no chord across it, and wouldn't put a third face on any edge.
-  Two equally small loops means the edge closed more than one thing at once, so nothing is
-  created and the user says what they meant — the edges stay either way.
+  holes and angle locks are handed on deliberately. Otherwise the edge may have **closed**
+  one or more loops, found by breadth-first search for the smallest ones through it that are
+  coplanar, enclose real area, have no chord across them, and wouldn't put a third face on
+  any edge. An edge can close **two** faces at once and both are real — the last edge of a
+  tetrahedron does exactly that, with a triangle either side of it — so they are made one at
+  a time, each search running against the design as it then stands. Constraint 10 caps an
+  edge at two faces, so two is the most that can ever be right; only more candidates than
+  there is room for (a fin of three meeting along one edge) is genuinely ambiguous, and then
+  nothing is made and the edges stay.
 - `src/geometry/constrain.ts` — the null-space solver behind Move. Builds the linear
   constraints a translation must satisfy, reduces them by Gram-Schmidt (so redundant and
   conflicting rows are dropped rather than silently picking a winner), and projects the
