@@ -68,6 +68,18 @@ interface DesignStoreState {
   drawPlane: DrawPlane | null;
   /** Live cursor position on the draw plane, driving the rubber-band segment. */
   drawCursor: Vec3 | null;
+  /**
+   * A point on real geometry under the cursor — a corner, a point along an edge, or a
+   * point on a face. When set it overrides the drawing plane, because the plane is a
+   * construction aid and the model is the actual thing being drawn on.
+   */
+  drawSnap: Vec3 | null;
+  /**
+   * The point a chain invented to start from, when it didn't start on existing geometry.
+   * A chain that never got as far as an edge should not leave this behind: committing
+   * every *segment* is the rule, and a lone point is not a segment.
+   */
+  chainStartCreatedId: string | null;
   /** Typed-in constraints for the pending point; null means "follow the cursor". */
   lockedLengthIn: number | null;
   lockedAngleDeg: number | null;
@@ -136,6 +148,7 @@ interface DesignStoreState {
   pullUpFace: (faceId: string, heightIn: number) => void;
   startDrawingAt: (vertexId: string, plane: DrawPlane) => void;
   setDrawCursor: (p: Vec3 | null) => void;
+  setDrawSnap: (p: Vec3 | null) => void;
   setLockedLength: (lengthIn: number | null) => void;
   setLockedAngle: (angleDeg: number | null) => void;
   setLockedHeight: (heightIn: number | null) => void;
@@ -198,8 +211,31 @@ function planeOfDraft(design: Design, draftVertexIds: string[]): DrawPlane | nul
   return planeThroughPoints(points);
 }
 
-/** Where the in-progress segment currently ends, or null if nothing is pending. */
-function pendingPointOf(s: DesignStoreState): Vec3 | null {
+/**
+ * Where the in-progress segment currently ends, or null if nothing is pending.
+ *
+ * Three sources, in order of authority:
+ *
+ * 1. **Typed values.** An exact length/angle/height is the most deliberate thing the user
+ *    can say, so it outranks whatever the pointer happens to be over.
+ * 2. **Geometry under the cursor.** Hovering a corner, an edge or a face puts the point
+ *    *there* rather than on the drawing plane. The plane is a construction aid for when
+ *    there is nothing better; the model is the real thing being drawn on.
+ * 3. **The drawing plane.** The fallback, for a point in open space.
+ */
+export type PendingPointInput = Pick<
+  DesignStoreState,
+  | 'design'
+  | 'draftVertexIds'
+  | 'drawPlane'
+  | 'drawCursor'
+  | 'drawSnap'
+  | 'lockedLengthIn'
+  | 'lockedAngleDeg'
+  | 'lockedHeightIn'
+>;
+
+export function resolvePendingPoint(s: PendingPointInput): Vec3 | null {
   if (!s.drawPlane || s.draftVertexIds.length === 0) return null;
   const lastId = s.draftVertexIds[s.draftVertexIds.length - 1];
   const from = s.design.vertices.find((v) => v.id === lastId)?.position;
@@ -214,9 +250,15 @@ function pendingPointOf(s: DesignStoreState): Vec3 | null {
     if (Math.abs(sin) > 1e-6) lengthIn = Math.abs(rise / sin);
   }
 
+  const anyLock = lengthIn !== null || s.lockedAngleDeg !== null;
   const fullyTyped = lengthIn !== null && s.lockedAngleDeg !== null;
-  const cursor = s.drawCursor ?? from;
-  if (!s.drawCursor && !fullyTyped) return null;
+
+  // Snapped to real geometry, and not being overridden by a typed value: take it verbatim.
+  // Projecting it onto the drawing plane would undo the snap, which is the whole point.
+  if (s.drawSnap && !anyLock) return s.drawSnap;
+
+  const cursor = s.drawSnap ?? s.drawCursor ?? from;
+  if (!s.drawCursor && !s.drawSnap && !fullyTyped) return null;
   return resolveNextPoint(s.drawPlane, from, cursor, { lengthIn, angleDeg: s.lockedAngleDeg });
 }
 
@@ -247,11 +289,35 @@ function removeFaces(design: Design, faceIds: Set<string>): Design {
   };
 }
 
+/**
+ * What ending a chain leaves behind.
+ *
+ * Everything already *drawn* stays: every segment was committed as it was made, so there
+ * is no half-drawn state to lose. The one exception is a start point the chain invented in
+ * open air that never got an edge attached — nothing was drawn from it, so it is litter
+ * rather than scaffold. A start point on existing geometry, or one some edge now reaches,
+ * is left alone.
+ */
+function endOfChain(s: DesignStoreState) {
+  const invented = s.chainStartCreatedId;
+  if (!invented || edgesTouchingVertex(s.design, invented).length > 0) {
+    return { ...CLEARED_DRAW_STATE };
+  }
+  return {
+    ...CLEARED_DRAW_STATE,
+    design: { ...s.design, vertices: s.design.vertices.filter((v) => v.id !== invented) },
+    // Dropped along with the click that placed it, rather than as its own undo step.
+    past: s.past.slice(0, -1),
+  };
+}
+
 /** Resets everything about a face-in-progress. */
 const CLEARED_DRAW_STATE = {
   draftVertexIds: [] as string[],
   drawPlane: null,
   drawCursor: null,
+  drawSnap: null,
+  chainStartCreatedId: null,
   lockedLengthIn: null,
   lockedAngleDeg: null,
   lockedHeightIn: null,
@@ -279,6 +345,8 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
   draftVertexIds: [],
   drawPlane: null,
   drawCursor: null,
+  drawSnap: null,
+  chainStartCreatedId: null,
   lockedLengthIn: null,
   lockedAngleDeg: null,
   lockedHeightIn: null,
@@ -360,7 +428,11 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
       lockedHeightIn: null,
     }),
 
-  /** Starting in empty space: the point is real from the moment it's placed. */
+  /**
+   * Starting in empty space. The point is placed immediately so the rubber band has
+   * something to hang off, but it is remembered as this chain's invention: if the chain
+   * ends without ever drawing an edge from it, it goes away again.
+   */
   startChainAtPoint: (p, plane) =>
     set((s) => {
       const id = makeId('v');
@@ -368,8 +440,10 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
       return {
         ...commit(s, nextDesign),
         draftVertexIds: [id],
+        chainStartCreatedId: id,
         drawPlane: plane,
         drawCursor: null,
+        drawSnap: null,
         lockedLengthIn: null,
         lockedAngleDeg: null,
         lockedHeightIn: null,
@@ -415,6 +489,7 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
     }),
 
   setDrawCursor: (p) => set({ drawCursor: p }),
+  setDrawSnap: (p) => set({ drawSnap: p }),
   setLockedLength: (lengthIn) => set({ lockedLengthIn: lengthIn }),
   setLockedAngle: (angleDeg) => set({ lockedAngleDeg: angleDeg }),
   setLockedHeight: (heightIn) => set({ lockedHeightIn: heightIn }),
@@ -428,7 +503,7 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
    */
   commitPendingPoint: () =>
     set((s) => {
-      const pending = pendingPointOf(s);
+      const pending = resolvePendingPoint(s);
       if (!pending || s.draftVertexIds.length === 0) return {};
       const id = makeId('v');
       const withVertex: Design = {
@@ -451,10 +526,10 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
       };
     }),
 
-  // Switching tools ends any chain in progress. Nothing is discarded — every segment was
-  // committed as it was drawn, so there is no half-drawn state left to lose.
+  // Switching tools ends any chain in progress, exactly as Esc would — so the two can't
+  // drift apart on what they leave behind.
   setBuildTool: (tool) =>
-    set((s) => (tool === s.buildTool ? {} : { buildTool: tool, ...CLEARED_DRAW_STATE })),
+    set((s) => (tool === s.buildTool ? {} : { buildTool: tool, ...endOfChain(s) })),
 
   frameView: () => set((s) => ({ frameNonce: s.frameNonce + 1 })),
 
@@ -487,8 +562,8 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
       };
     }),
 
-  /** Stops drawing. Everything already drawn stays exactly where it is. */
-  endChain: () => set({ ...CLEARED_DRAW_STATE }),
+  /** Stops drawing. See `endOfChain` for what survives it. */
+  endChain: () => set((s) => endOfChain(s)),
 
   pullUpFace: (faceId, heightIn) =>
     set((s) => {

@@ -1,5 +1,5 @@
-import { useDesignStore } from '../../store/designStore';
-import { resolveNextPoint, toPolar } from '../../geometry/drawPlane';
+import { useDesignStore, resolvePendingPoint } from '../../store/designStore';
+import { toPolar } from '../../geometry/drawPlane';
 import { NumberField } from '../ui/NumberField';
 
 /**
@@ -14,6 +14,7 @@ export function NextPointPanel() {
   const draftVertexIds = useDesignStore((s) => s.draftVertexIds);
   const drawPlane = useDesignStore((s) => s.drawPlane);
   const drawCursor = useDesignStore((s) => s.drawCursor);
+  const drawSnap = useDesignStore((s) => s.drawSnap);
   const lockedLengthIn = useDesignStore((s) => s.lockedLengthIn);
   const lockedAngleDeg = useDesignStore((s) => s.lockedAngleDeg);
   const setLockedLength = useDesignStore((s) => s.setLockedLength);
@@ -29,22 +30,24 @@ export function NextPointPanel() {
   const from = design.vertices.find((v) => v.id === lastId)?.position;
   if (!from) return null;
 
-  // A typed height stands in for length: given an angle to rise at and a height to reach,
-  // the distance along the segment follows. "45 degrees up to 4 inches" is then two typed
-  // numbers rather than a length the user has to work out first.
+  // The same resolver the viewport and the click both use, so every reading agrees.
+  const pending = resolvePendingPoint({
+    design,
+    draftVertexIds,
+    drawPlane,
+    drawCursor,
+    drawSnap,
+    lockedLengthIn,
+    lockedAngleDeg,
+    lockedHeightIn,
+  });
+
+  // Only for telling the user a typed height can't be reached along a level segment.
   let effectiveLength = lockedLengthIn;
   if (effectiveLength === null && lockedHeightIn !== null && lockedAngleDeg !== null) {
     const sin = Math.sin((lockedAngleDeg * Math.PI) / 180);
     if (Math.abs(sin) > 1e-6) effectiveLength = Math.abs((lockedHeightIn - from.z) / sin);
   }
-
-  const pending =
-    drawCursor || (effectiveLength !== null && lockedAngleDeg !== null)
-      ? resolveNextPoint(drawPlane, from, drawCursor ?? from, {
-          lengthIn: effectiveLength,
-          angleDeg: lockedAngleDeg,
-        })
-      : null;
 
   const live = pending ? toPolar(drawPlane, from, pending) : null;
   const canCommit = pending !== null;
@@ -98,6 +101,7 @@ export function NextPointPanel() {
       {pending && (
         <div className="status-row">
           Lands at X {pending.x.toFixed(3)}, Y {pending.y.toFixed(3)}, Z {pending.z.toFixed(3)} in
+          {drawSnap && !lockedLengthIn && lockedAngleDeg === null && ' — on existing geometry'}
         </div>
       )}
 

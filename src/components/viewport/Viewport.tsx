@@ -2,12 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { Canvas, useThree, type ThreeEvent } from '@react-three/fiber';
 import { OrbitControls, Line } from '@react-three/drei';
 import * as THREE from 'three';
-import { useDesignStore } from '../../store/designStore';
+import { useDesignStore, resolvePendingPoint } from '../../store/designStore';
 import type { Face, Vec3 } from '../../geometry/types';
 import { facePositions, findSharedEdge } from '../../geometry/mesh';
 import { faceLocalBasis, fromFaceLocal, toFaceLocal } from '../../geometry/basis';
-import { resolveNextPoint, verticalPlaneFacingCamera } from '../../geometry/drawPlane';
+import { verticalPlaneFacingCamera } from '../../geometry/drawPlane';
 import { fanTriangulatePositions, toArray } from './threeHelpers';
+import { V } from '../../geometry/vec3';
 
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 
@@ -103,6 +104,50 @@ function quaternionForNormal(normal: Vec3): THREE.Quaternion {
  * then the face's own plane once three points have fixed it. Pointer moves over it feed
  * the rubber-band segment; clicks commit the pending point.
  */
+/**
+ * What the pointer is over, if it's over real geometry.
+ *
+ * The drawing plane stands in front of (or through) the model, so without this the point
+ * follows the plane even while the cursor is plainly over a face — which reads as the point
+ * hanging in the foreground instead of settling onto the thing being pointed at.
+ *
+ * Geometry wins over the plane wherever the two disagree, including geometry *behind* it.
+ * That is deliberate, and it is the opposite of the rule used for deciding what a click
+ * selects: there, a broad face far behind the target is usually an accident, whereas here
+ * the cursor is visibly on the face and that is what the user means. Typing an exact
+ * length or angle overrides the snap, which is the way to put a point in open space in
+ * front of the model.
+ *
+ * A corner beats everything at any depth — it is a small target, so hitting one at all
+ * means it was aimed at. Otherwise the nearest edge or face takes it.
+ */
+function snapFromIntersections(
+  intersections: Array<{ object: THREE.Object3D; point: THREE.Vector3; distance: number }>,
+): Vec3 | null {
+  for (const i of intersections) {
+    const snapTo = i.object.userData?.snapTo as Vec3 | undefined;
+    if (i.object.userData?.isVertexHandle && snapTo) return snapTo;
+  }
+
+  // Already sorted near to far, so the first thing real is the thing being pointed at.
+  for (const i of intersections) {
+    const data = i.object.userData ?? {};
+    if (data.isEdgeHandle) {
+      const a = data.edgeA as Vec3 | undefined;
+      const b = data.edgeB as Vec3 | undefined;
+      if (!a || !b) continue;
+      // Onto the line itself, not merely near it.
+      const along = V.sub(b, a);
+      const lengthSq = V.dot(along, along);
+      if (lengthSq < 1e-12) continue;
+      const t = Math.min(1, Math.max(0, V.dot(V.sub(i.point, a), along) / lengthSq));
+      return V.add(a, V.scale(along, t));
+    }
+    if (data.isFaceHandle) return { x: i.point.x, y: i.point.y, z: i.point.z };
+  }
+  return null;
+}
+
 function DrawSurface() {
   const draftVertexIds = useDesignStore((s) => s.draftVertexIds);
   const drawPlane = useDesignStore((s) => s.drawPlane);
@@ -140,6 +185,7 @@ function DrawSurface() {
       position={[drawPlane.origin.x, drawPlane.origin.y, drawPlane.origin.z]}
       quaternion={orientation}
       onPointerMove={(e) => setDrawCursor({ x: e.point.x, y: e.point.y, z: e.point.z })}
+      userData={{ isDrawSurface: true }}
       onClick={(e) => {
         if (clickBelongsToGeometry(e)) return;
         e.stopPropagation();
@@ -208,8 +254,10 @@ function RubberBandSegment() {
   const draftVertexIds = useDesignStore((s) => s.draftVertexIds);
   const drawPlane = useDesignStore((s) => s.drawPlane);
   const drawCursor = useDesignStore((s) => s.drawCursor);
+  const drawSnap = useDesignStore((s) => s.drawSnap);
   const lockedLengthIn = useDesignStore((s) => s.lockedLengthIn);
   const lockedAngleDeg = useDesignStore((s) => s.lockedAngleDeg);
+  const lockedHeightIn = useDesignStore((s) => s.lockedHeightIn);
   const handleRadius = useHandleRadius();
 
   if (!drawPlane || draftVertexIds.length === 0) return null;
@@ -218,27 +266,96 @@ function RubberBandSegment() {
   const from = design.vertices.find((v) => v.id === lastId)?.position;
   if (!from) return null;
 
-  const fullyTyped = lockedLengthIn !== null && lockedAngleDeg !== null;
-  if (!drawCursor && !fullyTyped) return null;
-
-  const to = resolveNextPoint(drawPlane, from, drawCursor ?? from, {
-    lengthIn: lockedLengthIn,
-    angleDeg: lockedAngleDeg,
+  // The same resolver the click uses, so the line previews exactly what will be placed.
+  const to = resolvePendingPoint({
+    design,
+    draftVertexIds,
+    drawPlane,
+    drawCursor,
+    drawSnap,
+    lockedLengthIn,
+    lockedAngleDeg,
+    lockedHeightIn,
   });
+  if (!to) return null;
 
   return (
     <group>
       <Line
         points={[new THREE.Vector3(from.x, from.y, from.z), new THREE.Vector3(to.x, to.y, to.z)]}
-        color="#fbbf24"
+        color={drawSnap ? '#4ade80' : '#fbbf24'}
         lineWidth={2}
       />
+      {/* Green marks a point resting on real geometry rather than on the drawing plane. */}
       <mesh position={[to.x, to.y, to.z]}>
-        <sphereGeometry args={[handleRadius, 12, 12]} />
-        <meshBasicMaterial color="#fbbf24" transparent opacity={0.9} />
+        <sphereGeometry args={[handleRadius * (drawSnap ? 1.3 : 1), 12, 12]} />
+        <meshBasicMaterial color={drawSnap ? '#4ade80' : '#fbbf24'} transparent opacity={0.9} />
       </mesh>
     </group>
   );
+}
+
+/**
+ * Works out what the drawing cursor is resting on, by raycasting the scene directly.
+ *
+ * Deliberately not hung off the draw surface's own pointer events: that surface is a
+ * bounded quad, so wherever it doesn't happen to lie under the cursor there was no event
+ * at all and the snap never updated — which is precisely the case this is for, since the
+ * model is usually beside or behind the plane rather than on it.
+ */
+function DrawInference() {
+  const { camera, gl, scene, raycaster } = useThree();
+  const drawing = useDesignStore((s) => s.draftVertexIds.length > 0);
+  const setDrawSnap = useDesignStore((s) => s.setDrawSnap);
+
+  useEffect(() => {
+    if (!drawing) {
+      setDrawSnap(null);
+      return;
+    }
+    const canvas = gl.domElement;
+    const ndc = new THREE.Vector2();
+
+    const onMove = (ev: PointerEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      ndc.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+      ndc.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(ndc, camera);
+      setDrawSnap(snapFromIntersections(raycaster.intersectObjects(scene.children, true)));
+    };
+
+    canvas.addEventListener('pointermove', onMove);
+    return () => canvas.removeEventListener('pointermove', onMove);
+  }, [drawing, camera, gl, scene, raycaster, setDrawSnap]);
+
+  return null;
+}
+
+/**
+ * Where a pointer ray meets a horizontal plane, when that answer is worth having.
+ *
+ * A ray nearly parallel to the plane meets it enormously far away — a pixel of mouse
+ * movement then becomes yards of model, which is what makes a drag suddenly fling a corner
+ * into the distance and leave a long slender face behind. Below a shallow angle there is no
+ * usable answer, so the drag simply doesn't move rather than moving wildly.
+ *
+ * What does come back is held inside the work area, the same way sketch clicks are: a
+ * vertex stranded outside it is both unreachable and disruptive.
+ */
+const MIN_RAY_PITCH = 0.08; // ~4.6 degrees off parallel
+
+function hitHorizontalPlane(
+  ray: THREE.Ray,
+  planeZ: number,
+  halfExtent: number,
+  into: THREE.Vector3,
+): THREE.Vector3 | null {
+  if (Math.abs(ray.direction.z) < MIN_RAY_PITCH) return null;
+  const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -planeZ);
+  if (!ray.intersectPlane(plane, into)) return null;
+  const clamp = (value: number) => Math.min(halfExtent, Math.max(-halfExtent, value));
+  into.set(clamp(into.x), clamp(into.y), planeZ);
+  return into;
 }
 
 /**
@@ -262,8 +379,8 @@ function VertexDragHandler() {
     const canvas = gl.domElement;
     const raycaster = new THREE.Raycaster();
     const ndc = new THREE.Vector2();
-    const horizontalPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -start.z);
     const hit = new THREE.Vector3();
+    const half = useDesignStore.getState().design.basePlaneSizeIn / 2;
 
     const onMove = (ev: PointerEvent) => {
       const rect = canvas.getBoundingClientRect();
@@ -285,7 +402,7 @@ function VertexDragHandler() {
         return;
       }
 
-      if (ray.intersectPlane(horizontalPlane, hit)) {
+      if (hitHorizontalPlane(ray, start.z, half, hit)) {
         useDesignStore
           .getState()
           .moveVertex(draggingVertexId, { x: hit.x, y: hit.y, z: start.z }, { commit: false });
@@ -330,8 +447,8 @@ function EdgeDragHandler() {
     const canvas = gl.domElement;
     const raycaster = new THREE.Raycaster();
     const ndc = new THREE.Vector2();
-    const horizontalPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -origin.z);
     const hit = new THREE.Vector3();
+    const half = useDesignStore.getState().design.basePlaneSizeIn / 2;
     // Measured against where the edge sits right now, so each move is a delta rather than
     // an absolute — the store has already refused or redirected everything before it.
     const midpointNow = () => {
@@ -360,7 +477,7 @@ function EdgeDragHandler() {
         return;
       }
 
-      if (ray.intersectPlane(horizontalPlane, hit)) {
+      if (hitHorizontalPlane(ray, origin.z, half, hit)) {
         useDesignStore
           .getState()
           .moveEdgeBy(a, b, { x: hit.x - from.x, y: hit.y - from.y, z: 0 }, { commit: false });
@@ -474,7 +591,7 @@ function VertexHandle({ id, position, locked }: { id: string; position: Vec3; lo
           setHovered(true);
         }}
         onPointerOut={() => setHovered(false)}
-        userData={{ isVertexHandle: true }}
+        userData={{ isVertexHandle: true, vertexId: id, snapTo: position }}
       >
         <sphereGeometry args={[radius, 14, 14]} />
         <meshStandardMaterial color={color} />
@@ -633,7 +750,7 @@ function FaceEdges({ face }: { face: Face }) {
                   selectEdgePair({ a, b });
                   beginEdgeDrag(a, b);
                 }}
-                userData={{ isEdgeHandle: true }}
+                userData={{ isEdgeHandle: true, edgeA: positions[i], edgeB: positions[(i + 1) % n] }}
               >
                 <cylinderGeometry
                   args={[handleRadius * 0.7, handleRadius * 0.7, points[i].distanceTo(points[i + 1]), 6]}
@@ -694,6 +811,7 @@ function SceneContent() {
       <VertexDragHandler />
       <EdgeDragHandler />
       {mode === 'sketch' && <SketchPreview />}
+      {drawing && <DrawInference />}
       {drawing && <ChainStartSurface />}
       {drawing && <DrawSurface />}
       {drawing && <RubberBandSegment />}

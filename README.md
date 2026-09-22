@@ -55,6 +55,11 @@ The toolbar's five modes match the spec's workflow:
    - **Move** — drag a vertex, or grab an edge to move the whole edge. Dragging slides
      horizontally; hold Shift to move straight up/down. Locked vertices don't budge.
 
+     A drag that ends up nearly parallel to its own plane has no usable answer — the ray
+     meets the plane enormously far off, so a pixel of mouse becomes yards of model. Below
+     a few degrees the drag simply doesn't move rather than flinging the corner into the
+     distance, and whatever does come back is held inside the work area.
+
      Faces stay flat because the **drag is constrained**, not because anything is corrected
      afterward. Every move is a translation of some set of vertices; each face it would warp
      contributes one linear equation, and the move is projected onto whatever motion
@@ -92,6 +97,14 @@ The toolbar's five modes match the spec's workflow:
      Clicking near an edge splits that edge at the click, so the point lands *exactly* on
      the line rather than a hundredth of an inch off it — the difference between geometry
      that closes and geometry that looks like it should have.
+
+     **Whatever the cursor is over wins.** Hovering a corner, an edge or a face puts the
+     point *there*; the marker turns green to say so. Geometry beats the drawing plane even
+     when it sits behind it, which is deliberate and is the opposite of the rule for
+     deciding what a *click* selects — there a broad face far behind the target is usually
+     an accident, whereas here the cursor is visibly on the face and that is what's meant.
+     Typing an exact length or angle overrides the snap, and that's how to put a point in
+     open space in front of the model.
 
      Points land on a drawing plane, since a 2D cursor position has no single 3D answer.
      That plane is vertical and camera-facing through the start point, frozen so orbiting
