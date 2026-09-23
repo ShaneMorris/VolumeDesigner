@@ -46,6 +46,17 @@ export function installDragGuard(target?: PressTarget): () => void {
   };
 }
 
+/**
+ * Where the pointer went down, for a drag that wants to measure its own travel.
+ *
+ * The same reading this module already takes for telling clicks from orbits, handed on so
+ * a drag can start from the press rather than from its first move event — a fast mouse can
+ * cover real ground before the first `pointermove` arrives, and that travel should count.
+ */
+export function pressPoint(): { x: number; y: number } | null {
+  return pressedAt;
+}
+
 /** Whether the pointer travelled far enough since it went down to count as a drag. */
 export function pointerDragged(event: { clientX: number; clientY: number }): boolean {
   if (!pressedAt) return false;

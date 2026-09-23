@@ -55,10 +55,27 @@ The toolbar's five modes match the spec's workflow:
    - **Move** — drag a vertex, or grab an edge to move the whole edge. Dragging slides
      horizontally; hold Shift to move straight up/down. Locked vertices don't budge.
 
-     A drag that ends up nearly parallel to its own plane has no usable answer — the ray
-     meets the plane enormously far off, so a pixel of mouse becomes yards of model. Below
-     a few degrees the drag simply doesn't move rather than flinging the corner into the
-     distance, and whatever does come back is held inside the work area.
+     **A drag is read as pointer travel, not as a point in space.** Putting the vertex
+     wherever the pointer ray met its plane kept it exactly under the cursor, but the gain
+     is `1 / sin(angle between the ray and the plane)` and that diverges at the plane's
+     vanishing line. Measured on a default view: across the screen a pixel was worth
+     0.02in, while up the screen it was worth 0.17in at a raised vertex and grew as the
+     cursor rose. Forty pixels of mouse became nearly seven inches of model, the work-area
+     clamp caught it at the boundary, and the face left behind was a long slender sliver.
+     A shallow-ray cutoff didn't fix it — by the time a ray is shallow enough to trip one,
+     the gain has been unusable for a long while.
+
+     So the rates are worked out once, when the drag begins, and the pointer is measured
+     against them. The drag is therefore linear — the same pixel is worth the same distance
+     at the end of a sweep as at the start, where before it accelerated — and bounded, since
+     no part of the screen is worth an unbounded amount. Across the screen the exact rate is
+     used, because a horizontal plane holds the camera's right axis with no foreshortening
+     at all. Up the screen the exact rate is used too, but capped: a pixel up the screen is
+     worth at most twice a pixel across it. At an ordinary three-quarter view the cap
+     doesn't bite and the point sits under the cursor as before; looking along a plane
+     nearly edge-on it does, and the point trails the cursor rather than flying. Trailing is
+     the right way to fail, because a drag that lags can still be aimed. Whatever comes back
+     is still held inside the work area.
 
      Faces stay flat because the **drag is constrained**, not because anything is corrected
      afterward. Every move is a translation of some set of vertices; each face it would warp
@@ -157,7 +174,11 @@ ended over the same face placed a point in Draw, and would have dropped a T-nut 
 `viewport/dragGuard.ts` fixes that: the pointer's press position is recorded in the capture
 phase, and every handler that *does* something on click ignores the event if the pointer
 travelled more than a few pixels. A wobble is still a click; a sweep across the viewport is
-not.
+not. The same press position is what a Move drag measures its travel from, so a fast mouse
+that has already covered ground before the first `pointermove` doesn't lose it.
+
+`viewport/dragFrame.ts` holds the pointer-to-model rates described under **Move** above —
+pure arithmetic over the camera's axes, so it is unit-tested without a browser.
 
 ## Architecture
 

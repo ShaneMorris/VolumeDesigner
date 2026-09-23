@@ -276,7 +276,7 @@ export function resolvePendingPoint(s: PendingPointInput): Vec3 | null {
  * is wide, and a little below zero, since a point can legitimately sit just under the
  * base plane while geometry is being worked out.
  */
-function clampToWorkArea(p: Vec3, basePlaneSizeIn: number): Vec3 {
+export function clampToWorkArea(p: Vec3, basePlaneSizeIn: number): Vec3 {
   const half = basePlaneSizeIn / 2;
   const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value));
   return {

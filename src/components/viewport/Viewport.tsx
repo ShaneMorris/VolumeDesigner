@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Canvas, useThree, type ThreeEvent } from '@react-three/fiber';
 import { OrbitControls, Line } from '@react-three/drei';
 import * as THREE from 'three';
-import { useDesignStore, resolvePendingPoint } from '../../store/designStore';
+import { useDesignStore, resolvePendingPoint, clampToWorkArea } from '../../store/designStore';
 import type { Face, Vec3 } from '../../geometry/types';
 import { facePositions, findSharedEdge } from '../../geometry/mesh';
 import { faceEdgePairs } from '../../geometry/edges';
@@ -10,7 +10,9 @@ import { edgeKey } from '../../geometry/types';
 import { faceLocalBasis, fromFaceLocal, toFaceLocal } from '../../geometry/basis';
 import { verticalPlaneFacingCamera } from '../../geometry/drawPlane';
 import { fanTriangulatePositions, toArray } from './threeHelpers';
-import { installDragGuard, pointerDragged } from './dragGuard';
+import { installDragGuard, pointerDragged, pressPoint } from './dragGuard';
+import { horizontalDragFrame, planarTranslation, verticalTranslation } from './dragFrame';
+import type { DragFrame } from './dragFrame';
 import { V } from '../../geometry/vec3';
 
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
@@ -354,31 +356,39 @@ function DrawInference() {
   return null;
 }
 
-/**
- * Where a pointer ray meets a horizontal plane, when that answer is worth having.
- *
- * A ray nearly parallel to the plane meets it enormously far away — a pixel of mouse
- * movement then becomes yards of model, which is what makes a drag suddenly fling a corner
- * into the distance and leave a long slender face behind. Below a shallow angle there is no
- * usable answer, so the drag simply doesn't move rather than moving wildly.
- *
- * What does come back is held inside the work area, the same way sketch clicks are: a
- * vertex stranded outside it is both unreachable and disruptive.
- */
-const MIN_RAY_PITCH = 0.08; // ~4.6 degrees off parallel
+/** A three.js vector as the plain one the geometry code speaks. */
+const toVec3 = (v: THREE.Vector3): Vec3 => ({ x: v.x, y: v.y, z: v.z });
 
-function hitHorizontalPlane(
-  ray: THREE.Ray,
-  planeZ: number,
-  halfExtent: number,
-  into: THREE.Vector3,
-): THREE.Vector3 | null {
-  if (Math.abs(ray.direction.z) < MIN_RAY_PITCH) return null;
-  const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -planeZ);
-  if (!ray.intersectPlane(plane, into)) return null;
-  const clamp = (value: number) => Math.min(halfExtent, Math.max(-halfExtent, value));
-  into.set(clamp(into.x), clamp(into.y), planeZ);
-  return into;
+/**
+ * The drag frame for a grab at `grabbed`, read off the live camera.
+ *
+ * Taken once when a drag begins: the scale then stays put for the whole drag, so the
+ * pointer keeps meaning the same thing from the first pixel to the last. See `dragFrame`
+ * for why a drag is measured this way rather than by intersecting the pointer ray with a
+ * plane.
+ */
+function frameForGrab(camera: THREE.Camera, canvas: HTMLCanvasElement, grabbed: Vec3): DragFrame | null {
+  const forward = camera.getWorldDirection(new THREE.Vector3());
+  const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+  const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1).normalize();
+  const fov = camera instanceof THREE.PerspectiveCamera ? camera.fov : 75;
+  return horizontalDragFrame(
+    { right: toVec3(right), forward: toVec3(forward), up: toVec3(up) },
+    toVec3(camera.position),
+    grabbed,
+    fov,
+    canvas.getBoundingClientRect().height,
+  );
+}
+
+/**
+ * How far the pointer has travelled since the press that started this drag.
+ *
+ * Measured from the press itself where the guard caught it, and from the first move
+ * otherwise, so no travel is lost to a mouse that was already moving.
+ */
+function pointerTravel(ev: PointerEvent, anchor: { x: number; y: number }) {
+  return { dx: ev.clientX - anchor.x, dy: ev.clientY - anchor.y };
 }
 
 /**
@@ -396,40 +406,30 @@ function VertexDragHandler() {
   useEffect(() => {
     if (!draggingVertexId) return;
 
-    const start = useDesignStore.getState().design.vertices.find((v) => v.id === draggingVertexId)?.position;
+    const store = useDesignStore.getState();
+    const start = store.design.vertices.find((v) => v.id === draggingVertexId)?.position;
     if (!start) return;
 
     const canvas = gl.domElement;
-    const raycaster = new THREE.Raycaster();
-    const ndc = new THREE.Vector2();
-    const hit = new THREE.Vector3();
-    const half = useDesignStore.getState().design.basePlaneSizeIn / 2;
+    const frame = frameForGrab(camera, canvas, start);
+    if (!frame) return;
+    const size = store.design.basePlaneSizeIn;
+    let anchor = pressPoint();
 
     const onMove = (ev: PointerEvent) => {
-      const rect = canvas.getBoundingClientRect();
-      ndc.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
-      ndc.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
-      raycaster.setFromCamera(ndc, camera);
-      const ray = raycaster.ray;
-
-      if (ev.shiftKey) {
-        // Closest point on the vertical line through the vertex to the pointer ray.
-        const w0 = new THREE.Vector3().subVectors(start, ray.origin);
-        const b = ray.direction.z;
-        const denom = 1 - b * b;
-        if (Math.abs(denom) < 1e-6) return; // looking straight down the axis
-        const sc = (b * ray.direction.dot(w0) - w0.z) / denom;
-        useDesignStore
-          .getState()
-          .moveVertex(draggingVertexId, { x: start.x, y: start.y, z: start.z + sc }, { commit: false });
+      if (!anchor) {
+        anchor = { x: ev.clientX, y: ev.clientY };
         return;
       }
-
-      if (hitHorizontalPlane(ray, start.z, half, hit)) {
-        useDesignStore
-          .getState()
-          .moveVertex(draggingVertexId, { x: hit.x, y: hit.y, z: start.z }, { commit: false });
-      }
+      const { dx, dy } = pointerTravel(ev, anchor);
+      // Always measured from where the grab started, never accumulated from wherever the
+      // vertex ended up: a move the solver redirected or cut short is then undone by
+      // moving the pointer back, rather than being baked in.
+      const move = ev.shiftKey
+        ? verticalTranslation(frame, dy)
+        : planarTranslation(frame, dx, dy);
+      const target = clampToWorkArea(V.add(start, move), size);
+      useDesignStore.getState().moveVertex(draggingVertexId, target, { commit: false });
     };
 
     // The whole drag is one undo step, recorded from where it started rather than from
@@ -461,50 +461,40 @@ function EdgeDragHandler() {
   useEffect(() => {
     if (!draggingEdge) return;
     const { a, b } = draggingEdge;
-    const verts = useDesignStore.getState().design.vertices;
+    const store = useDesignStore.getState();
+    const verts = store.design.vertices;
     const pa = verts.find((v) => v.id === a)?.position;
     const pb = verts.find((v) => v.id === b)?.position;
     if (!pa || !pb) return;
 
-    const origin = new THREE.Vector3((pa.x + pb.x) / 2, (pa.y + pb.y) / 2, (pa.z + pb.z) / 2);
+    // The midpoint is where the edge was grabbed, so it is what the pointer refers to.
+    const start = V.scale(V.add(pa, pb), 0.5);
     const canvas = gl.domElement;
-    const raycaster = new THREE.Raycaster();
-    const ndc = new THREE.Vector2();
-    const hit = new THREE.Vector3();
-    const half = useDesignStore.getState().design.basePlaneSizeIn / 2;
-    // Measured against where the edge sits right now, so each move is a delta rather than
-    // an absolute — the store has already refused or redirected everything before it.
+    const frame = frameForGrab(camera, canvas, start);
+    if (!frame) return;
+    const size = store.design.basePlaneSizeIn;
+    let anchor = pressPoint();
+
     const midpointNow = () => {
       const current = useDesignStore.getState().design.vertices;
       const ca = current.find((v) => v.id === a)!.position;
       const cb = current.find((v) => v.id === b)!.position;
-      return new THREE.Vector3((ca.x + cb.x) / 2, (ca.y + cb.y) / 2, (ca.z + cb.z) / 2);
+      return V.scale(V.add(ca, cb), 0.5);
     };
 
     const onMove = (ev: PointerEvent) => {
-      const rect = canvas.getBoundingClientRect();
-      ndc.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
-      ndc.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
-      raycaster.setFromCamera(ndc, camera);
-      const ray = raycaster.ray;
-      const from = midpointNow();
-
-      if (ev.shiftKey) {
-        const w0 = new THREE.Vector3().subVectors(origin, ray.origin);
-        const d = ray.direction.z;
-        const denom = 1 - d * d;
-        if (Math.abs(denom) < 1e-6) return;
-        const sc = (d * ray.direction.dot(w0) - w0.z) / denom;
-        const targetZ = origin.z + sc;
-        useDesignStore.getState().moveEdgeBy(a, b, { x: 0, y: 0, z: targetZ - from.z }, { commit: false });
+      if (!anchor) {
+        anchor = { x: ev.clientX, y: ev.clientY };
         return;
       }
-
-      if (hitHorizontalPlane(ray, origin.z, half, hit)) {
-        useDesignStore
-          .getState()
-          .moveEdgeBy(a, b, { x: hit.x - from.x, y: hit.y - from.y, z: 0 }, { commit: false });
-      }
+      const { dx, dy } = pointerTravel(ev, anchor);
+      const move = ev.shiftKey
+        ? verticalTranslation(frame, dy)
+        : planarTranslation(frame, dx, dy);
+      // Where the midpoint should be, less where it actually is: the store takes a
+      // translation, and it may have refused or redirected earlier ones.
+      const target = clampToWorkArea(V.add(start, move), size);
+      useDesignStore.getState().moveEdgeBy(a, b, V.sub(target, midpointNow()), { commit: false });
     };
 
     const onUp = () => endDrag();
