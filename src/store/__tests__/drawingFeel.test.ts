@@ -22,6 +22,11 @@ const plane = {
   normal: at(0, 1, 0),
 };
 
+/**
+ * A triangular wall standing in the XZ plane. Its a-c edge runs from the origin to
+ * (6, 0, 4), so (3, 0, 2) is the midpoint of that edge — the kind of thing the hover snap
+ * reports, now that it reports corners and edges only.
+ */
 function seed(): Design {
   return {
     ...createEmptyDesign(),
@@ -43,7 +48,7 @@ describe('the point follows the model, not the plane in front of it', () => {
 
   it('takes a point on real geometry over the drawing plane', () => {
     state().setDrawCursor(at(3, 0, 9)); // where the plane says
-    state().setDrawSnap(at(3, 0, 2)); // where the cursor actually is, on the wall
+    state().setDrawSnap(at(3, 0, 2)); // where the cursor actually is, on the a-c edge
     expect(resolvePendingPoint(state())).toEqual(at(3, 0, 2));
   });
 
@@ -53,7 +58,7 @@ describe('the point follows the model, not the plane in front of it', () => {
     expect(resolvePendingPoint(state())?.z).toBeCloseTo(9, 6);
   });
 
-  it('lets a typed value override the geometry under the cursor', () => {
+  it('lets a typed value override the edge under the cursor', () => {
     // Typing is the most deliberate thing available, so it outranks hovering.
     state().setDrawSnap(at(3, 0, 2));
     state().setLockedAngle(90);
@@ -71,7 +76,7 @@ describe('the point follows the model, not the plane in front of it', () => {
     expect(placed.position).toEqual(at(3, 0, 2));
   });
 
-  it('clears the snap when the pointer leaves the geometry', () => {
+  it('clears the snap when the pointer leaves the edge', () => {
     state().setDrawSnap(at(3, 0, 2));
     state().setDrawSnap(null);
     state().setDrawCursor(at(1, 0, 1));

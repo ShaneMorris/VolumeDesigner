@@ -98,13 +98,20 @@ The toolbar's five modes match the spec's workflow:
      the line rather than a hundredth of an inch off it — the difference between geometry
      that closes and geometry that looks like it should have.
 
-     **Whatever the cursor is over wins.** Hovering a corner, an edge or a face puts the
-     point *there*; the marker turns green to say so. Geometry beats the drawing plane even
-     when it sits behind it, which is deliberate and is the opposite of the rule for
-     deciding what a *click* selects — there a broad face far behind the target is usually
-     an accident, whereas here the cursor is visibly on the face and that is what's meant.
-     Typing an exact length or angle overrides the snap, and that's how to put a point in
-     open space in front of the model.
+     **Corners and edges under the cursor win.** Hovering one puts the point *there*; the
+     marker turns green to say so. Geometry beats the drawing plane even when it sits
+     behind it, which is deliberate: a corner or an edge is narrow enough that having the
+     cursor on one means it was aimed at.
+
+     Faces are not snapped to. A face is the broadest thing in the scene, and snapping to
+     one dragged the point onto whatever panel happened to lie under the cursor instead of
+     letting it follow the plane being drawn on — most of a face is not a place anyone is
+     aiming at, so the snapping fought the drawing rather than helping it. A point wanted
+     in the middle of a face is reached by typing a length and angle, or by drawing on the
+     plane over it.
+
+     Typing an exact length or angle overrides the snap either way, and that's how to put a
+     point in open space in front of the model.
 
      Points land on a drawing plane, since a 2D cursor position has no single 3D answer.
      That plane is vertical and camera-facing through the start point, frozen so orbiting

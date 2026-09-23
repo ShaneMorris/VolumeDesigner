@@ -119,21 +119,21 @@ function quaternionForNormal(normal: Vec3): THREE.Quaternion {
  * the rubber-band segment; clicks commit the pending point.
  */
 /**
- * What the pointer is over, if it's over real geometry.
+ * What the pointer is over, if it's over something worth snapping to.
  *
- * The drawing plane stands in front of (or through) the model, so without this the point
- * follows the plane even while the cursor is plainly over a face — which reads as the point
- * hanging in the foreground instead of settling onto the thing being pointed at.
+ * Corners and edges only. Both are things a drawn point would sensibly land *on*, and both
+ * are narrow enough that hitting one means it was aimed at — so a corner wins at any depth,
+ * and otherwise the nearest edge takes it. Geometry wins over the drawing plane even when
+ * it lies behind it, which is deliberate: the cursor is visibly on the edge and that is
+ * what the user means.
  *
- * Geometry wins over the plane wherever the two disagree, including geometry *behind* it.
- * That is deliberate, and it is the opposite of the rule used for deciding what a click
- * selects: there, a broad face far behind the target is usually an accident, whereas here
- * the cursor is visibly on the face and that is what the user means. Typing an exact
- * length or angle overrides the snap, which is the way to put a point in open space in
- * front of the model.
+ * Faces are deliberately not snapped to. A face is the broadest thing in the scene, so
+ * including them meant the point was constantly being pulled onto whatever panel happened
+ * to be under the cursor rather than following the plane being drawn on — most of a face
+ * is not a place anyone is aiming at, and the snapping was fighting the drawing rather
+ * than helping it.
  *
- * A corner beats everything at any depth — it is a small target, so hitting one at all
- * means it was aimed at. Otherwise the nearest edge or face takes it.
+ * Typing an exact length or angle overrides the snap either way.
  */
 function snapFromIntersections(
   intersections: Array<{ object: THREE.Object3D; point: THREE.Vector3; distance: number }>,
@@ -157,7 +157,6 @@ function snapFromIntersections(
       const t = Math.min(1, Math.max(0, V.dot(V.sub(i.point, a), along) / lengthSq));
       return V.add(a, V.scale(along, t));
     }
-    if (data.isFaceHandle) return { x: i.point.x, y: i.point.y, z: i.point.z };
   }
   return null;
 }
