@@ -158,6 +158,20 @@ The toolbar's five modes match the spec's workflow:
      and left standing is visible — otherwise the one thing this tool exists for produces
      nothing you can see.
 
+   **Colour says what a face is; brightness says what's happening to it.** The base is
+   orange and every other panel is robin's egg blue, always. Picking one brightens it —
+   same hue, a little more saturation and lightness — and hovering brightens it half as
+   far. A face never wears another face's colour.
+
+   That's a correction: selecting used to *replace* a face's colour with orange, and
+   hovering replaced it with grey. Since the base is selected the moment it's created, its
+   orange had never been anything but the selection colour — so picking a panel turned that
+   panel orange, and the base dropped to the slate it had secretly been all along and
+   looked like it had turned into a panel. Neither face had a colour that stayed its own.
+
+   The exception is Angles mode: selecting an edge tints *both* faces that share it purple.
+   That's a statement about the two of them as a pair, which brightness alone can't make.
+
    The "pull-up" shortcut extrudes the selected base face straight up by a numeric
    height — available, never automatic.
 3. **Angles** — click one face then an adjacent face to select their shared edge and
