@@ -118,20 +118,34 @@ describe('how much freedom a vertex has', () => {
 describe('how much freedom an edge has — and why it differs', () => {
   it('an edge can move where neither of its ends could alone', () => {
     const design = baseAndWall();
-    // Each end is pinned to a line by the two quads meeting there...
+    // Each end is pinned to a line: the wall fixes its y, and the base plane its z.
     expect(freedomForTranslation(design, ['b0']).dof).toBe(1);
     expect(freedomForTranslation(design, ['b1']).dof).toBe(1);
-    // ...yet the edge they span moves freely. Both quads have their opposite side parallel
-    // to this one, so translating it just tilts each face — it stays flat either way.
-    expect(freedomForTranslation(design, ['b0', 'b1']).dof).toBe(3);
+    // ...yet the edge they span has a whole plane to move in. Both quads have their
+    // opposite side parallel to this one, so translating it just tilts each face and it
+    // stays flat either way. Only the base plane still holds it, and that holds it to a
+    // plane rather than a line — this is a base edge (constraint 11).
+    const edge = freedomForTranslation(design, ['b0', 'b1']);
+    expect(edge.dof).toBe(2);
+    for (const direction of edge.basis) expect(Math.abs(direction.z)).toBeCloseTo(0, 9);
   });
 
   it('a box has pinned corners but edges that still slide', () => {
     const design = box();
     expect(freedomForTranslation(design, ['b0']).dof).toBe(0);
-    // The two faces along this edge are parallelograms and constrain nothing; the faces at
-    // either end both say the same thing — keep x where it is — so two directions survive.
+    // The two faces along this edge are parallelograms and constrain nothing. What is left
+    // is the side walls at either end, which both say keep x where it is, and the base
+    // plane, which says keep z — leaving this base edge free to slide along y alone.
     const edge = freedomForTranslation(design, ['b0', 'b1']);
+    expect(edge.dof).toBe(1);
+    expect(Math.abs(edge.basis[0].y)).toBeCloseTo(1, 9);
+  });
+
+  it('lets a box edge that is not on the base keep the freedom the base edge loses', () => {
+    // The same edge one storey up. Nothing here is on the base, so the parallelogram
+    // reasoning above runs to its conclusion: two directions survive, not one.
+    const design = box();
+    const edge = freedomForTranslation(design, ['t0', 't1']);
     expect(edge.dof).toBe(2);
     for (const direction of edge.basis) expect(Math.abs(direction.x)).toBeCloseTo(0, 9);
   });

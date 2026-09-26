@@ -32,9 +32,11 @@ describe('vertex locking', () => {
   });
 
   it('moveVertex still moves an unlocked vertex', () => {
-    useDesignStore.getState().moveVertex('b', { x: 9, y: 9, z: 9 }, { commit: true });
+    // Within the base plane, since this triangle is the base and constraint 11 holds it
+    // there — what is under test here is the lock, not the plane.
+    useDesignStore.getState().moveVertex('b', { x: 9, y: 9, z: 0 }, { commit: true });
     const b = useDesignStore.getState().design.vertices.find((v) => v.id === 'b');
-    expect(b?.position).toEqual({ x: 9, y: 9, z: 9 });
+    expect(b?.position).toEqual({ x: 9, y: 9, z: 0 });
   });
 
   it('setVerticesLocked toggles a whole set at once', () => {

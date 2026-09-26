@@ -92,6 +92,24 @@ drawing, editing, or loading a file.
     through the shared edges, so freeing a pinned vertex generally needs a matching split on at
     least one adjoining face.
 
+11. **The base face lies in the base plane, always.** The base is what the volume bolts to
+    the wall by, so it is not a face that happens to be flat — it *is* the base plane, at
+    z = 0. Its corners slide around within that plane; they never leave it, by drag, by
+    angle lock, or by anything else. A volume whose base is not flat cannot be mounted, and
+    a base cut on a tilt is scrap.
+
+    This does not follow from constraint 9, which is why it is stated separately. Constraint
+    9 only asks that each face stay flat in its own right, and that leaves the base free in
+    all the ways that matter: a *triangular* base imposes no planarity equation at all, since
+    any three points are coplanar, and a *rectangular* one imposes none on a whole edge, since
+    the two corners staying behind run parallel to the two moving. Both cases could be lifted
+    clean off the plane. Constraint 9 also could not keep the base level even where it does
+    apply, since it would just as happily hold a base that was already tilted.
+
+    An angle lock names which of its two faces rotates to satisfy it. The base is never that
+    face: the lock is satisfied by turning the other one instead. The dihedral angle is the
+    same either way, so nothing is given up by refusing.
+
 **Enforcing constraint 9: constrained dragging**
 
 Dragging is restricted to motion that keeps every affected face planar. The alternative —

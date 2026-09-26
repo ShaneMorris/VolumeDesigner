@@ -67,18 +67,20 @@ describe('moveEdgeBy moves both ends together', () => {
   beforeEach(() => state().loadDesign(seed()));
 
   it('translates both ends by the same amount', () => {
-    state().moveEdgeBy('b0', 'b1', { x: 0, y: 0, z: 1.5 }, { commit: true });
-    expect(posOf('b0')).toEqual({ x: 0, y: 0, z: 1.5 });
-    expect(posOf('b1')).toEqual({ x: 4, y: 0, z: 1.5 });
+    // Across the base plane: this is a base edge, and constraint 11 keeps it in the plane.
+    state().moveEdgeBy('b0', 'b1', { x: 0, y: 1.5, z: 0 }, { commit: true });
+    expect(posOf('b0')).toEqual({ x: 0, y: 1.5, z: 0 });
+    expect(posOf('b1')).toEqual({ x: 4, y: 1.5, z: 0 });
   });
 
   it('goes where neither end could have gone alone', () => {
-    // Straight up is refused for the corner...
-    state().moveVertex('b0', { x: 0, y: 0, z: 1.5 }, { commit: true });
-    expect(posOf('b0').z).toBeCloseTo(0, 9);
-    // ...but allowed for the edge, because both quads simply tilt.
-    state().moveEdgeBy('b0', 'b1', { x: 0, y: 0, z: 1.5 }, { commit: true });
-    expect(posOf('b0').z).toBeCloseTo(1.5, 9);
+    // Backwards along the base is refused for the corner, since the wall would have to
+    // warp to follow it...
+    state().moveVertex('b0', { x: 0, y: 1.5, z: 0 }, { commit: true });
+    expect(posOf('b0').y).toBeCloseTo(0, 9);
+    // ...but allowed for the edge, because the wall then simply tilts back instead.
+    state().moveEdgeBy('b0', 'b1', { x: 0, y: 1.5, z: 0 }, { commit: true });
+    expect(posOf('b0').y).toBeCloseTo(1.5, 9);
   });
 
   it('keeps every affected face flat', () => {
@@ -87,7 +89,7 @@ describe('moveEdgeBy moves both ends together', () => {
   });
 
   it('leaves the far corners exactly where they were', () => {
-    state().moveEdgeBy('b0', 'b1', { x: 0, y: 0, z: 2 }, { commit: true });
+    state().moveEdgeBy('b0', 'b1', { x: 0, y: 2, z: 0 }, { commit: true });
     expect(posOf('b2')).toEqual({ x: 4, y: 4, z: 0 });
     expect(posOf('b3')).toEqual({ x: 0, y: 4, z: 0 });
   });
@@ -121,10 +123,10 @@ describe('a drag is one undo step, taken from where it started', () => {
   it('does the same for an edge drag', () => {
     const before = { ...posOf('b1') };
     state().beginEdgeDrag('b0', 'b1');
-    state().moveEdgeBy('b0', 'b1', { x: 0, y: 0, z: 1 });
-    state().moveEdgeBy('b0', 'b1', { x: 0, y: 0, z: 1 });
+    state().moveEdgeBy('b0', 'b1', { x: 0, y: 1, z: 0 });
+    state().moveEdgeBy('b0', 'b1', { x: 0, y: 1, z: 0 });
     state().endDrag();
-    expect(posOf('b1').z).toBeCloseTo(2, 9);
+    expect(posOf('b1').y).toBeCloseTo(2, 9);
 
     state().undo();
     expect(posOf('b1')).toEqual(before);

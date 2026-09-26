@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { AngleLock, Design, Face, Hole, Vec3 } from '../geometry/types';
-import { clampBasePlaneSize, createEmptyDesign, edgeKey } from '../geometry/types';
+import { clampBasePlaneSize, createEmptyDesign, edgeKey, BASE_PLANE_Z } from '../geometry/types';
 import { deriveEdges, faceEdgeKeys, findSharedEdge, getFace, isFacePlanar } from '../geometry/mesh';
 import { edgesTouchingVertex, orphanVertexIds, removeEdgeKeys, withFaceEdges } from '../geometry/edges';
 import { normalizeDesign, type RawDesign } from '../geometry/normalize';
@@ -200,6 +200,8 @@ interface DesignStoreState {
   resetDesign: () => void;
   dismissDesignIssues: () => void;
   makeFacesPlanar: () => void;
+  /** Drop every corner of the base face back onto the base plane (constraint 11). */
+  settleBaseOntoPlane: () => void;
 }
 
 /** The plane of a draft chain once it has enough points to define one. */
@@ -934,6 +936,28 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
         ...commit(s, flattened),
         designIssues: validateDesign(flattened),
       };
+    }),
+
+  /**
+   * Puts a drifted base back on the base plane (requirements §3, constraint 11).
+   *
+   * Every editing operation holds the base there now, so this is for designs saved before
+   * that was true. Unlike flattening a warped face there is nothing to choose: the base
+   * plane is at a known height, so settling a corner onto it means setting its z and
+   * nothing else. The x and y the user placed are kept exactly.
+   */
+  settleBaseOntoPlane: () =>
+    set((s) => {
+      const base = s.design.faces.find((f) => f.id === s.design.baseFaceId);
+      if (!base) return {};
+      const onBase = new Set(base.vertexIds);
+      const settled: Design = {
+        ...s.design,
+        vertices: s.design.vertices.map((v) =>
+          onBase.has(v.id) ? { ...v, position: { ...v.position, z: BASE_PLANE_Z } } : v,
+        ),
+      };
+      return { ...commit(s, settled), designIssues: validateDesign(settled) };
     }),
 }));
 

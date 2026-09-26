@@ -1,5 +1,5 @@
 import type { Design, EdgeKey, Face } from './types';
-import { edgeKey } from './types';
+import { edgeKey, BASE_PLANE_Z } from './types';
 import { facePositions, planarityDeviation } from './mesh';
 import { faceEdgePairs } from './edges';
 import { V, polygonArea } from './vec3';
@@ -34,6 +34,8 @@ export interface DesignIssue {
 export const MIN_FACE_WIDTH_IN = 0.01;
 /** Matches the tolerance `isFacePlanar` uses. */
 const PLANARITY_EPS_IN = 1e-3;
+/** How far a base corner may sit off the base plane before it counts as off it. */
+const BASE_PLANE_EPS_IN = 1e-3;
 
 /**
  * A face's narrowest meaningful dimension: `2 * area / perimeter`.
@@ -279,6 +281,25 @@ export function validateDesign(design: Design): DesignIssue[] {
   }
   if (design.baseFaceId && !faceIds.has(design.baseFaceId)) {
     issues.push({ constraint: 8, severity: 'error', message: `The base face reference points at a face that doesn't exist.` });
+  }
+
+  // Constraint 11 — the base face is the base plane, not merely a flat face.
+  const base = design.faces.find((f) => f.id === design.baseFaceId);
+  if (base) {
+    for (const id of base.vertexIds) {
+      const vertex = design.vertices.find((v) => v.id === id);
+      if (!vertex) continue; // constraint 8 has this
+      const off = vertex.position.z - BASE_PLANE_Z;
+      if (Math.abs(off) >= BASE_PLANE_EPS_IN) {
+        issues.push({
+          constraint: 11,
+          severity: 'warning',
+          faceId: base.id,
+          vertexId: id,
+          message: `A corner of "${base.label}" sits ${off.toFixed(3)}in off the base plane — the base has to be flat on the wall.`,
+        });
+      }
+    }
   }
 
   return issues;

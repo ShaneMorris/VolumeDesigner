@@ -12,10 +12,12 @@ export function DesignIssuesBanner() {
   const repairs = useDesignStore((s) => s.designRepairs);
   const dismiss = useDesignStore((s) => s.dismissDesignIssues);
   const makeFacesPlanar = useDesignStore((s) => s.makeFacesPlanar);
+  const settleBaseOntoPlane = useDesignStore((s) => s.settleBaseOntoPlane);
 
   if (issues.length === 0 && repairs.length === 0) return null;
 
   const warped = issues.filter((i) => i.constraint === 9);
+  const offBase = issues.filter((i) => i.constraint === 11);
 
   return (
     <div className="issues-banner">
@@ -49,6 +51,11 @@ export function DesignIssuesBanner() {
         {warped.length > 0 && (
           <button onClick={makeFacesPlanar}>
             Make {warped.length} warped {warped.length === 1 ? 'face' : 'faces'} flat
+          </button>
+        )}
+        {offBase.length > 0 && (
+          <button onClick={settleBaseOntoPlane}>
+            Put the base back on the base plane
           </button>
         )}
         <button onClick={dismiss}>Dismiss</button>

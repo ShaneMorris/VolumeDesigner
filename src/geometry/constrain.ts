@@ -1,4 +1,5 @@
 import type { Design, Face, Vec3 } from './types';
+import { BASE_PLANE_Z } from './types';
 import { V, polygonNormal, polygonCentroid } from './vec3';
 import { getVertex } from './mesh';
 import { effectiveWidthIn, faceSelfIntersects, MIN_FACE_WIDTH_IN } from './validate';
@@ -97,12 +98,47 @@ function faceConstraints(design: Design, face: Face, moving: Set<string>): Motio
   return [];
 }
 
-/** Every constraint on translating `movingIds`, from every face any of them belongs to. */
+/**
+ * The base plane's own equation, for any moving corner of the base (constraint 11).
+ *
+ * The base isn't a face that happens to be flat — it *is* the base plane, the surface the
+ * volume bolts to the wall by. Its corners slide about within it and never leave it.
+ *
+ * Nothing above says so. `faceConstraints` asks only that a face stay flat in its own
+ * right, and that leaves the base free in exactly the ways that matter: a triangular base
+ * yields no equation at all, since any three points are coplanar, and a rectangular one
+ * yields none for a whole edge, since the corners staying behind run parallel to the pair
+ * moving. Both could be lifted clean off the plane, which is the defect this fixes. Even
+ * where a planarity equation does apply it would hold a base that was already tilted just
+ * as contentedly, so it could never have kept the base level either.
+ *
+ * Stated as `z = BASE_PLANE_Z` rather than as "don't change z", so a corner that has
+ * already drifted is brought back the first time it is touched.
+ */
+function baseConstraints(design: Design, moving: Set<string>): MotionConstraint[] {
+  const base = design.faces.find((f) => f.id === design.baseFaceId);
+  if (!base) return [];
+  return base.vertexIds
+    .filter((id) => moving.has(id))
+    .map((id) => ({
+      normal: { x: 0, y: 0, z: 1 },
+      rhs: BASE_PLANE_Z - getVertex(design, id).position.z,
+      faceId: base.id,
+      faceLabel: base.label,
+    }));
+}
+
+/** Every constraint on translating `movingIds`, from the base plane and from every face. */
 export function constraintsForTranslation(design: Design, movingIds: string[]): MotionConstraint[] {
   const moving = new Set(movingIds);
-  return design.faces
-    .filter((f) => f.vertexIds.some((id) => moving.has(id)))
-    .flatMap((f) => faceConstraints(design, f, moving));
+  // The base plane goes first: `reduce` keeps the rows it meets first and drops later ones
+  // that add nothing, and of all the rules here this is the one that must survive.
+  return [
+    ...baseConstraints(design, moving),
+    ...design.faces
+      .filter((f) => f.vertexIds.some((id) => moving.has(id)))
+      .flatMap((f) => faceConstraints(design, f, moving)),
+  ];
 }
 
 interface ReducedRow {

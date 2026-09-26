@@ -63,6 +63,15 @@ export interface Design {
   basePlaneSizeIn: number;
 }
 
+/**
+ * The height of the base plane (requirements §3, constraint 11).
+ *
+ * The base face doesn't merely start here — it lives here. It is the surface the finished
+ * volume bolts to the wall by, so a base that has been tilted or lifted is scrap rather
+ * than a design choice, and every editing operation holds its corners at this height.
+ */
+export const BASE_PLANE_Z = 0;
+
 /** Bounds for the square base plane the model is built on. */
 export const BASE_PLANE_MIN_IN = 6;
 export const BASE_PLANE_MAX_IN = 96;

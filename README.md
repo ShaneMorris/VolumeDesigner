@@ -77,6 +77,18 @@ The toolbar's five modes match the spec's workflow:
      the right way to fail, because a drag that lags can still be aimed. Whatever comes back
      is still held inside the work area.
 
+     **The base face never leaves the base plane.** It's the surface the volume bolts to the
+     wall by, so a base cut on a tilt is scrap — its corners slide around at z = 0 and never
+     rise off it, by drag, by Shift-drag or by angle lock. This is its own rule rather than a
+     consequence of keeping faces flat, because flatness doesn't cover it: a *triangular*
+     base imposes no flatness equation at all (any three points are coplanar) and a
+     *rectangular* one imposes none on a whole edge (the corners staying behind run parallel
+     to the pair moving), so both used to lift clean off the plane. Flatness also couldn't
+     have kept the base *level*, only flat — it would hold a tilted base just as happily.
+     An angle lock names which of its two faces rotates; asked to rotate the base, it turns
+     the other one instead, which reaches the same dihedral angle. A design that arrives with
+     a drifted base is reported on open, with a button to settle it back.
+
      Faces stay flat because the **drag is constrained**, not because anything is corrected
      afterward. Every move is a translation of some set of vertices; each face it would warp
      contributes one linear equation, and the move is projected onto whatever motion
